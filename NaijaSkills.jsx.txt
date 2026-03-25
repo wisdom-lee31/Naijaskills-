@@ -1,0 +1,1380 @@
+/**
+ * NaijaSkills — Full React App
+ * ============================================================
+ * Features:
+ *  ✅ Worker Directory (search + category filters)
+ *  ✅ Worker Registration with ₦1,000 Annual Fee
+ *       - Pay via Paystack (card/bank transfer/USSD)
+ *       - Pay via manual bank transfer (upload proof)
+ *       - After payment → goes to admin for approval
+ *  ✅ Paystack 10% contact fee per job
+ *  ✅ Admin Panel (approve/reject, view reg payments)
+ *  ✅ Trusted Worker System (👑 badge, protected, private link)
+ *
+ * HOW TO RUN:
+ *  1. npx create-react-app naijaskills && cd naijaskills
+ *  2. Replace src/App.js with this file
+ *  3. Add to public/index.html <head>:
+ *       <script src="https://js.paystack.co/v1/inline.js"></script>
+ *       <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+ *  4. Set PAYSTACK_KEY, BANK_* details below
+ *  5. npm start
+ *
+ * PRIVATE TRUSTED LINK:
+ *  http://localhost:3000?trusted=NAIJASKILLS_OWNER
+ * ============================================================
+ */
+
+import { useState, useMemo, useEffect } from "react";
+
+// ─── CONFIG ──────────────────────────────────────────────────
+const PAYSTACK_KEY       = "pk_test_YOUR_PUBLIC_KEY_HERE";
+const PLATFORM_FEE_PCT   = 10;
+const REG_FEE            = 1000;                 // ₦1,000 annual registration fee
+const BANK_NAME          = "First Bank Nigeria"; // ← your bank
+const BANK_ACCOUNT_NUM   = "1234567890";         // ← your account number
+const BANK_ACCOUNT_NAME  = "NaijaSkills Ltd";    // ← your account name
+const ADMIN_PASSWORD     = "admin123";           // ← change before going live
+const TRUSTED_SECRET     = "NAIJASKILLS_OWNER";  // ← secret URL param
+
+// ─── THEME ───────────────────────────────────────────────────
+const G = {
+  green:"#008751", greenDark:"#005c38", greenLight:"#00b86a",
+  gold:"#F5A623",  goldLight:"#FFD080",
+  cream:"#FDF6EC", white:"#ffffff", gray:"#6B7280",
+  light:"#F3F4F6", dark:"#111827",  red:"#DC2626",
+  blue:"#2563EB",
+};
+const TRUSTED_GOLD   = "#B8860B";
+const TRUSTED_BG     = "linear-gradient(135deg,#FFF8DC,#FFEAA0)";
+const TRUSTED_BORDER = "#DAA520";
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'DM Sans',sans-serif;background:${G.cream};color:${G.dark};}
+  button{cursor:pointer;font-family:inherit;}
+  input,select,textarea{font-family:inherit;}
+  @keyframes fadeUp  {from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes slideUp {from{transform:translateY(100%)}to{transform:translateY(0)}}
+  @keyframes popIn   {from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:scale(1)}}
+  @keyframes pulse   {0%,100%{opacity:1}50%{opacity:.6}}
+  .fade-up  {animation:fadeUp 0.4s both;}
+  .slide-up {animation:slideUp 0.3s ease;}
+  .pop-in   {animation:popIn 0.28s ease;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .trusted-card{border:2px solid #DAA520!important;box-shadow:0 4px 24px rgba(218,165,32,.2)!important;}
+  @keyframes msgIn {from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .msg-in {animation:msgIn 0.25s ease both;}
+`;
+
+// ─── DATA ────────────────────────────────────────────────────
+const AVATAR_BG = {
+  "Home Services":         "linear-gradient(135deg,#E8F5E9,#C8E6C9)",
+  "Construction & Trades": "linear-gradient(135deg,#FFF8E1,#FFE082)",
+  "Tech & IT":             "linear-gradient(135deg,#E3F2FD,#BBDEFB)",
+  "Creative & Design":     "linear-gradient(135deg,#FCE4EC,#F8BBD0)",
+};
+const CATEGORIES = ["Home Services","Construction & Trades","Tech & IT","Creative & Design"];
+const MAX_TAGS = 8; // increased from 5 to 8
+
+// Suggested tags per category
+const SUGGESTED_TAGS = {
+  "Home Services": ["Deep Cleaning","House Cleaning","Office Cleaning","Post-Construction","Laundry","Ironing","Cooking","Nanny","Elderly Care","Childcare","Plumbing","Pipe Repair","Drainage","Water Heater","Electrician","Wiring","Solar","Fault Repair","Pest Control","Fumigation","Security Guard","Gardening","Pool Cleaning","AC Repair","Generator Repair","Painting","Interior Decor"],
+  "Construction & Trades": ["Bricklaying","Masonry","Plastering","Tiling","Floor Tiling","Wall Tiling","Roofing","Waterproofing","Carpentry","Furniture","Doors & Windows","Welding","Fabrication","Gates","Railings","Steel Work","Painting","Epoxy Floors","Screeding","False Ceiling","POP Design","Aluminium Work","Glass Fitting","Excavation","Landscaping"],
+  "Tech & IT": ["Web Development","React","WordPress","E-Commerce","Mobile App","Android","iOS","Fintech","Graphic Design","Logo Design","Branding","Social Media","Content Creation","Video Editing","Photography","CCTV","Networking","PC Repair","Data Recovery","IT Support","Cybersecurity","UI/UX Design","SEO","Digital Marketing","Database","Cloud Services"],
+  "Creative & Design": ["Fashion Design","Tailoring","Ankara","Aso-ebi","Embroidery","Beading","Makeup Artist","Bridal Makeup","Airbrush","Gele Tying","Photography","Videography","Drone","Wedding","Events","DJ","Sound Engineer","Catering","Cake Design","Pastry","Event Planning","MC/Host","Decoration","Floral Design","Printing","Signage","Animation"],
+};
+
+// Colour palette for tags
+const TAG_COLORS = [
+  {bg:"rgba(0,135,81,.12)",   color:"#005c38", border:"rgba(0,135,81,.3)"},
+  {bg:"rgba(37,99,235,.1)",   color:"#1E40AF", border:"rgba(37,99,235,.25)"},
+  {bg:"rgba(124,58,237,.1)",  color:"#5B21B6", border:"rgba(124,58,237,.25)"},
+  {bg:"rgba(245,158,11,.12)", color:"#92400E", border:"rgba(245,158,11,.3)"},
+  {bg:"rgba(236,72,153,.1)",  color:"#9D174D", border:"rgba(236,72,153,.25)"},
+  {bg:"rgba(20,184,166,.12)", color:"#0F766E", border:"rgba(20,184,166,.3)"},
+  {bg:"rgba(239,68,68,.1)",   color:"#991B1B", border:"rgba(239,68,68,.25)"},
+  {bg:"rgba(16,185,129,.12)", color:"#065F46", border:"rgba(16,185,129,.3)"},
+];
+const tagColor = (i) => TAG_COLORS[i % TAG_COLORS.length];
+
+const STATES = ["Abia","Adamawa","Akwa Ibom","Anambra","Bauchi","Bayelsa","Benue","Borno","Cross River","Delta","Ebonyi","Edo","Ekiti","Enugu","FCT","Gombe","Imo","Jigawa","Kaduna","Kano","Katsina","Kebbi","Kogi","Kwara","Lagos","Nasarawa","Niger","Ogun","Ondo","Osun","Oyo","Plateau","Rivers","Sokoto","Taraba","Yobe","Zamfara"];
+
+const INITIAL_WORKERS = [
+  { id:1,  name:"Amaka Obi",       skill:"House Cleaning",     cat:"Home Services",         city:"Lagos",   state:"Lagos",   avatar:"🧹", rating:4.9, reviews:87,  phone:"08012345678", bio:"Professional house cleaner with 6 years experience. Deep cleaning, post-construction, regular maintenance.",  tags:["Deep Cleaning","Post-Construction","Office Cleaning"], verified:true,  rate:5000,  rateMin:3000, rateMax:8000,  priceType:"range",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-03-01" },
+  { id:2,  name:"Emeka Nwosu",      skill:"Plumbing",           cat:"Home Services",         city:"Enugu",   state:"Enugu",   avatar:"🔧", rating:4.7, reviews:64,  phone:"08023456789", bio:"Certified plumber handling pipe repairs, installation, and drainage. Fast response guaranteed.",              tags:["Pipe Repair","Drainage","Water Heaters"],              verified:true,  rate:8000,  rateMin:8000, rateMax:null,  priceType:"fixed",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-01-15" },
+  { id:3,  name:"Kunle Adeyemi",    skill:"Electrician",        cat:"Home Services",         city:"Ibadan",  state:"Oyo",     avatar:"⚡", rating:4.6, reviews:54,  phone:"08045678901", bio:"Licensed electrician. Wiring, fault detection, solar panel installation.",                                     tags:["Wiring","Solar","Fault Repair"],                      verified:true,  rate:10000, rateMin:8000, rateMax:15000, priceType:"range",     priceUnit:"per day",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-02-20" },
+  { id:4,  name:"Chukwudi Okeke",   skill:"Mason / Bricklayer", cat:"Construction & Trades", city:"Onitsha", state:"Anambra", avatar:"🧱", rating:4.8, reviews:73,  phone:"08078901234", bio:"Expert mason with 12 years experience in residential and commercial construction.",                           tags:["Bricklaying","Tiling","Plastering"],                  verified:true,  rate:12000, rateMin:12000,rateMax:null,  priceType:"fixed",     priceUnit:"per day",  status:"approved", trusted:false, regPaid:true, regExpiry:"2026-12-01" },
+  { id:5,  name:"Musa Ibrahim",     skill:"Carpenter",          cat:"Construction & Trades", city:"Kano",    state:"Kano",    avatar:"🪚", rating:4.7, reviews:58,  phone:"08089012345", bio:"Skilled carpenter producing furniture, doors, windows, and roofing.",                                         tags:["Furniture","Roofing","Doors & Windows"],               verified:true,  rate:9000,  rateMin:6000, rateMax:20000, priceType:"range",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-03-10" },
+  { id:6,  name:"Dayo Adebayo",     skill:"Web Developer",      cat:"Tech & IT",             city:"Lagos",   state:"Lagos",   avatar:"💻", rating:4.9, reviews:104, phone:"08034560000", bio:"Full-stack web developer. React, Node.js, WordPress, e-commerce expert.",                                    tags:["React","WordPress","E-Commerce"],                     verified:true,  rate:50000, rateMin:50000,rateMax:null,  priceType:"negotiable",priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-01-05" },
+  { id:7,  name:"Chiamaka Uche",    skill:"Graphic Designer",   cat:"Tech & IT",             city:"Abuja",   state:"FCT",     avatar:"🖌️", rating:4.8, reviews:88,  phone:"08045670000", bio:"Creative graphic designer for logos, branding, flyers, and social media graphics.",                          tags:["Logo Design","Branding","Social Media"],               verified:true,  rate:30000, rateMin:20000,rateMax:50000, priceType:"range",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2026-11-30" },
+  { id:8,  name:"Blessing Ikenna",  skill:"Fashion Designer",   cat:"Creative & Design",     city:"Aba",     state:"Abia",    avatar:"👗", rating:4.9, reviews:131, phone:"08090120000", bio:"Talented fashion designer creating Ankara, traditional, and contemporary styles.",                            tags:["Ankara","Aso-ebi","Embroidery"],                      verified:true,  rate:15000, rateMin:15000,rateMax:null,  priceType:"fixed",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-02-14" },
+  { id:9,  name:"Hajiya Zainab",    skill:"Makeup Artist",      cat:"Creative & Design",     city:"Abuja",   state:"FCT",     avatar:"💄", rating:5.0, reviews:143, phone:"08012340001", bio:"Flawless bridal and event makeup. Airbrush, HD, and traditional techniques.",                               tags:["Bridal Makeup","Airbrush","Home Service"],             verified:true,  rate:20000, rateMin:15000,rateMax:30000, priceType:"range",     priceUnit:"per job",  status:"approved", trusted:false, regPaid:true, regExpiry:"2027-03-21" },
+];
+
+// ─── HELPERS ─────────────────────────────────────────────────
+const fmt   = n => Number(n).toLocaleString();
+const stars = r => "★".repeat(Math.floor(r)) + (r % 1 >= 0.5 ? "½" : "");
+const uid   = () => Date.now() + Math.floor(Math.random()*9999);
+const addYear = () => { const d = new Date(); d.setFullYear(d.getFullYear()+1); return d.toISOString().split("T")[0]; };
+
+// Format price display: fixed or range
+const PRICE_UNITS = ["per job","per hour","per day","per week","per month","negotiable"];
+const QUOTE_STATUSES = { pending:"⏳ Pending", accepted:"✅ Accepted", declined:"❌ Declined", countered:"🔄 Counter-offer", paid:"💳 Paid" };
+
+// Initial demo quotes
+const INITIAL_QUOTES = [
+  { id:"Q001", workerId:1, workerName:"Amaka Obi", workerSkill:"House Cleaning", workerPhone:"08012345678",
+    customerName:"Tunde Bello", customerEmail:"tunde@gmail.com", customerPhone:"08099887766",
+    jobTitle:"Deep clean 3-bedroom flat", jobDesc:"Need thorough cleaning of a 3-bedroom flat in Lekki. Includes kitchen, bathrooms, and all rooms. Move-in cleaning.", jobDate:"2026-04-05", jobLocation:"Lekki Phase 1, Lagos",
+    workerPrice:null, agreedPrice:null, unit:"per job", status:"pending", messages:[
+      {from:"customer",text:"Hi, I need a deep clean for my 3-bedroom flat before I move in. Available April 5th.",time:"10:32 AM"},
+    ], createdAt:"2026-03-21" },
+  { id:"Q002", workerId:6, workerName:"Dayo Adebayo", workerSkill:"Web Developer", workerPhone:"08034560000",
+    customerName:"Ngozi Eze", customerEmail:"ngozi@biz.com", customerPhone:"08077665544",
+    jobTitle:"E-commerce website for fashion store", jobDesc:"Build an online store for my fashion business. Need product listings, cart, payment integration, and mobile-friendly design.", jobDate:"2026-04-10", jobLocation:"Remote",
+    workerPrice:150000, agreedPrice:null, unit:"per job", status:"countered", messages:[
+      {from:"customer",text:"I need an e-commerce site for my fashion store. Can you quote me?",time:"9:15 AM"},
+      {from:"worker",text:"Hello Ngozi! I can build a full e-commerce store with Paystack integration. My quote is ₦150,000 for the full project.",time:"11:05 AM"},
+      {from:"customer",text:"That's a bit high. Can we do ₦120,000?",time:"11:30 AM"},
+    ], createdAt:"2026-03-20" },
+];
+
+const fmtPrice = (w) => {
+  const unit = w.priceUnit || "per job";
+  if (w.priceType === "range" && w.rateMin && w.rateMax)
+    return `₦${fmt(w.rateMin)} – ₦${fmt(w.rateMax)} ${unit}`;
+  if (w.priceType === "negotiable") return "Negotiable";
+  return `₦${fmt(w.rate)} ${unit}`;
+};
+
+// ─── PAYSTACK ────────────────────────────────────────────────
+function openPaystack({ email, amountNaira, metadata, onSuccess, onClose }) {
+  if (typeof window.PaystackPop === "undefined") {
+    alert("Add Paystack script to public/index.html");
+    return;
+  }
+  const handler = window.PaystackPop.setup({
+    key: PAYSTACK_KEY, email, amount: amountNaira * 100, currency: "NGN",
+    ref: "NS_" + Date.now(), metadata,
+    callback: res => onSuccess(res),
+    onClose,
+  });
+  handler.openIframe();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SHARED COMPONENTS
+// ═══════════════════════════════════════════════════════════════
+const TrustedBadge = ({ size="sm" }) => (
+  <span style={{display:"inline-flex",alignItems:"center",gap:3,background:"linear-gradient(135deg,#DAA520,#FFD700)",color:"#3D2800",padding:size==="lg"?"5px 14px":"2px 8px",borderRadius:50,fontSize:size==="lg"?"0.8rem":"0.58rem",fontFamily:"Syne,sans-serif",fontWeight:800,boxShadow:"0 2px 8px rgba(218,165,32,.4)"}}>
+    👑 {size==="lg"?"Trusted by Owner":"Trusted"}
+  </span>
+);
+
+// ─── REGISTRATION FEE PAYMENT MODAL ──────────────────────────
+function RegFeeModal({ workerData, onSuccess, onClose }) {
+  const [method, setMethod]     = useState("paystack"); // "paystack" | "bank"
+  const [proofName, setProofName] = useState("");
+  const [proofNote, setProofNote] = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [bankDone, setBankDone] = useState(false);
+  const [copied, setCopied]     = useState("");
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text).then(()=>{ setCopied(label); setTimeout(()=>setCopied(""),2000); });
+  };
+
+  const payViaPaystack = () => {
+    if (!workerData.email) {
+      alert("Please provide your email address in the registration form.");
+      return;
+    }
+    setLoading(true);
+    openPaystack({
+      email: workerData.email || "worker@naijaskills.com",
+      amountNaira: REG_FEE,
+      metadata: { type:"registration_fee", worker_name: workerData.name, annual_fee: REG_FEE },
+      onSuccess: res => {
+        setLoading(false);
+        onSuccess({ method:"paystack", ref: res.reference, amount: REG_FEE });
+      },
+      onClose: () => setLoading(false),
+    });
+  };
+
+  const submitBankProof = () => {
+    if (!proofNote.trim()) { alert("Please describe your transfer (e.g. date, bank, amount)."); return; }
+    onSuccess({ method:"bank_transfer", ref:"BANK_" + Date.now(), amount: REG_FEE, proof: proofNote });
+  };
+
+  const overlay = { position:"fixed",inset:0,background:"rgba(0,0,0,.65)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:16 };
+  const box = { background:"#fff",borderRadius:20,width:"100%",maxWidth:420,maxHeight:"90vh",overflowY:"auto" };
+  const methodBtn = (m, label, icon, desc) => ({
+    onClick: ()=>setMethod(m),
+    style: { width:"100%", border:`2px solid ${method===m?G.green:"#E5E7EB"}`, background: method===m?"rgba(0,135,81,.06)":"#fff", borderRadius:12, padding:"12px 14px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", transition:"all .2s", marginBottom:8 }
+  });
+
+  return (
+    <div style={overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="pop-in" style={box}>
+
+        {/* Header */}
+        <div style={{background:"linear-gradient(135deg,#005c38,#008751)",padding:"22px 20px",borderRadius:"20px 20px 0 0",color:"#fff",textAlign:"center"}}>
+          <div style={{fontSize:"2rem",marginBottom:6}}>📋</div>
+          <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.1rem",fontWeight:800}}>Annual Registration Fee</div>
+          <div style={{fontSize:"0.8rem",color:"rgba(255,255,255,.8)",marginTop:4}}>Pay once a year to stay listed on NaijaSkills</div>
+          <div style={{background:"rgba(255,255,255,.15)",borderRadius:10,padding:"10px 16px",marginTop:14,display:"inline-block"}}>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.8rem",fontWeight:800}}>₦{fmt(REG_FEE)}</div>
+            <div style={{fontSize:"0.72rem",color:"rgba(255,255,255,.8)"}}>Valid for 12 months</div>
+          </div>
+        </div>
+
+        <div style={{padding:"20px 20px 24px"}}>
+          <div style={{fontSize:"0.82rem",color:G.gray,marginBottom:16,lineHeight:1.6}}>
+            Hi <strong style={{color:G.dark}}>{workerData.name}</strong>, choose how you'd like to pay your ₦{fmt(REG_FEE)} annual registration fee. After payment, your profile will be sent to admin for approval.
+          </div>
+
+          {/* Method selector */}
+          <div style={{marginBottom:16}}>
+            <div style={{fontSize:"0.8rem",fontWeight:600,marginBottom:10,color:G.dark}}>Choose payment method:</div>
+
+            <div {...methodBtn("paystack")}>
+              <div style={{fontSize:"1.6rem"}}>💳</div>
+              <div>
+                <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.88rem",color:method==="paystack"?G.green:G.dark}}>Pay with Paystack</div>
+                <div style={{fontSize:"0.72rem",color:G.gray}}>Card, Bank Transfer, USSD — instant</div>
+              </div>
+              <div style={{marginLeft:"auto",width:18,height:18,borderRadius:"50%",border:`2px solid ${method==="paystack"?G.green:"#D1D5DB"}`,background:method==="paystack"?G.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {method==="paystack"&&<div style={{width:8,height:8,borderRadius:"50%",background:"#fff"}}/>}
+              </div>
+            </div>
+
+            <div {...methodBtn("bank")}>
+              <div style={{fontSize:"1.6rem"}}>🏦</div>
+              <div>
+                <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.88rem",color:method==="bank"?G.green:G.dark}}>Manual Bank Transfer</div>
+                <div style={{fontSize:"0.72rem",color:G.gray}}>Transfer to our account, submit proof</div>
+              </div>
+              <div style={{marginLeft:"auto",width:18,height:18,borderRadius:"50%",border:`2px solid ${method==="bank"?G.green:"#D1D5DB"}`,background:method==="bank"?G.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {method==="bank"&&<div style={{width:8,height:8,borderRadius:"50%",background:"#fff"}}/>}
+              </div>
+            </div>
+          </div>
+
+          {/* PAYSTACK OPTION */}
+          {method==="paystack" && (
+            <div>
+              <div style={{background:"rgba(0,135,81,.06)",border:"1px solid rgba(0,135,81,.2)",borderRadius:12,padding:"12px 14px",marginBottom:16,fontSize:"0.82rem",color:G.greenDark,lineHeight:1.6}}>
+                ✅ Click the button below. Paystack will open a secure payment popup where you can pay with card, bank transfer, or USSD.
+              </div>
+              <button onClick={payViaPaystack} disabled={loading} style={{width:"100%",background:G.green,color:"#fff",border:"none",borderRadius:12,padding:14,fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",opacity:loading?.6:1,marginBottom:8}}>
+                {loading?"Opening Paystack…":"💳 Pay ₦1,000 via Paystack"}
+              </button>
+            </div>
+          )}
+
+          {/* BANK TRANSFER OPTION */}
+          {method==="bank" && !bankDone && (
+            <div>
+              <div style={{background:G.light,borderRadius:12,padding:"14px 16px",marginBottom:14}}>
+                <div style={{fontFamily:"Syne,sans-serif",fontSize:"0.82rem",fontWeight:700,color:G.dark,marginBottom:10}}>🏦 Transfer ₦{fmt(REG_FEE)} to:</div>
+                {[["Bank",BANK_NAME],["Account Number",BANK_ACCOUNT_NUM],["Account Name",BANK_ACCOUNT_NAME],["Amount",`₦${fmt(REG_FEE)}`],["Narration",`REG-${workerData.name?.split(" ")[0]||"Worker"}`]].map(([l,v])=>(
+                  <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid #E5E7EB",fontSize:"0.82rem"}}>
+                    <span style={{color:G.gray}}>{l}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <strong style={{color:G.dark}}>{v}</strong>
+                      {(l==="Account Number"||l==="Amount") && (
+                        <button onClick={()=>copyToClipboard(v,l)} style={{background:copied===l?"rgba(0,135,81,.1)":G.light,border:"none",borderRadius:6,padding:"2px 8px",fontSize:"0.68rem",color:copied===l?G.green:G.gray,fontWeight:600}}>
+                          {copied===l?"✓ Copied":"Copy"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{marginBottom:14}}>
+                <label style={{display:"block",fontSize:"0.8rem",fontWeight:600,marginBottom:6,color:G.dark}}>📝 Transfer Proof / Description <span style={{color:G.red}}>*</span></label>
+                <textarea
+                  value={proofNote} onChange={e=>setProofNote(e.target.value)}
+                  placeholder={`Describe your transfer:\n• Date: e.g. 21 March 2026\n• Bank used: e.g. GTBank\n• Amount: ₦1,000\n• Teller/Transaction ID (if available)`}
+                  style={{width:"100%",border:"1.5px solid #E5E7EB",borderRadius:10,padding:"10px 12px",fontSize:"0.82rem",resize:"vertical",minHeight:100,outline:"none",color:G.dark}}
+                />
+                <div style={{fontSize:"0.7rem",color:G.gray,marginTop:4}}>Admin will verify your transfer before approving your profile.</div>
+              </div>
+
+              <div style={{background:"rgba(245,166,35,.1)",border:"1px solid rgba(245,166,35,.3)",borderRadius:10,padding:"10px 13px",marginBottom:14,fontSize:"0.78rem",color:"#7C5A00",lineHeight:1.6}}>
+                ⚠️ <strong>Note:</strong> Bank transfer verification may take up to 24 hours. Your profile will be reviewed by admin after verification.
+              </div>
+
+              <button onClick={submitBankProof} style={{width:"100%",background:"linear-gradient(135deg,#005c38,#008751)",color:"#fff",border:"none",borderRadius:12,padding:14,fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",marginBottom:8}}>
+                🏦 Submit Transfer Proof
+              </button>
+            </div>
+          )}
+
+          <button onClick={onClose} style={{width:"100%",background:"none",border:"none",color:G.gray,fontSize:"0.8rem",padding:"6px 0"}}>
+            Cancel — go back to form
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── REGISTRATION SUCCESS MODAL ───────────────────────────────
+function RegSuccessModal({ workerData, payInfo, onClose }) {
+  const isBank = payInfo.method === "bank_transfer";
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,padding:"32px 22px",width:"100%",maxWidth:380,textAlign:"center"}}>
+        <div style={{fontSize:"3.5rem",marginBottom:12}}>{isBank?"🏦":"🎉"}</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.2rem",fontWeight:800,marginBottom:8,color:G.green}}>
+          {isBank?"Transfer Proof Submitted!":"Payment Successful!"}
+        </div>
+        <div style={{fontSize:"0.85rem",color:G.gray,lineHeight:1.65,marginBottom:16}}>
+          {isBank
+            ? "Your bank transfer details have been submitted. Admin will verify your payment and approve your profile within 24 hours."
+            : "Your ₦1,000 annual registration fee has been received. Your profile is now pending admin review and approval."}
+        </div>
+
+        {/* Summary card */}
+        <div style={{background:G.light,borderRadius:14,padding:"14px 16px",marginBottom:20,textAlign:"left"}}>
+          {[
+            ["Name", workerData.name],
+            ["Skill", workerData.skill],
+            ["Location", `${workerData.city}, ${workerData.state}`],
+            ["Fee Paid", `₦${fmt(REG_FEE)} (Annual)`],
+            ["Payment Method", isBank?"Bank Transfer":"Paystack"],
+            ["Reference", payInfo.ref],
+            ["Status", "Pending Admin Approval"],
+            ["Renewal Due", addYear()],
+          ].map(([k,v])=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:"0.8rem",padding:"4px 0",borderBottom:"1px solid #E5E7EB"}}>
+              <span style={{color:G.gray}}>{k}</span>
+              <span style={{fontWeight:600,color:k==="Status"?"#D97706":k==="Fee Paid"?G.green:G.dark}}>{v}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{background:"rgba(0,135,81,.06)",border:"1px solid rgba(0,135,81,.2)",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:"0.78rem",color:G.greenDark,lineHeight:1.5}}>
+          📱 You'll be notified once admin approves your profile. Check back soon!
+        </div>
+
+        <button onClick={onClose} style={{width:"100%",background:G.green,color:"#fff",border:"none",borderRadius:12,padding:13,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.92rem"}}>
+          Done ✓
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+//  QUOTE REQUEST MODAL  (customer fills job details)
+// ═══════════════════════════════════════════════════════════════
+function QuoteRequestModal({ worker, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    customerName:"", customerEmail:"", customerPhone:"",
+    jobTitle:"", jobDesc:"", jobDate:"", jobLocation:"",
+  });
+  const [errs, setErrs] = useState({});
+  const set = k => e => setForm(f=>({...f,[k]:e.target.value}));
+  const inp = k => ({ width:"100%", border:`1.5px solid ${errs[k]?G.red:"#E5E7EB"}`, borderRadius:10, padding:"10px 12px", fontSize:"0.88rem", outline:"none", color:G.dark, background:"#fff" });
+  const lbl = (t,req) => <label style={{display:"block",fontSize:"0.78rem",fontWeight:600,marginBottom:4}}>{t}{req&&<span style={{color:G.red}}> *</span>}</label>;
+  const err = k => errs[k] && <div style={{fontSize:"0.7rem",color:G.red,marginTop:3}}>{errs[k]}</div>;
+
+  const submit = () => {
+    const e = {};
+    ["customerName","customerEmail","customerPhone","jobTitle","jobDesc"].forEach(k=>{ if(!form[k].trim()) e[k]="Required"; });
+    if(Object.keys(e).length){ setErrs(e); return; }
+    onSubmit({
+      id: "Q" + Date.now(),
+      workerId: worker.id, workerName: worker.name, workerSkill: worker.skill, workerPhone: worker.phone,
+      customerName: form.customerName.trim(), customerEmail: form.customerEmail.trim(), customerPhone: form.customerPhone.trim(),
+      jobTitle: form.jobTitle.trim(), jobDesc: form.jobDesc.trim(),
+      jobDate: form.jobDate, jobLocation: form.jobLocation.trim(),
+      workerPrice: null, agreedPrice: null, unit: worker.priceUnit||"per job",
+      status: "pending",
+      messages: [{ from:"customer", text: form.jobDesc.trim(), time: new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) }],
+      createdAt: new Date().toISOString().split("T")[0],
+    });
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:350,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="slide-up" style={{background:"#fff",borderRadius:"24px 24px 0 0",padding:"22px 20px 36px",width:"100%",maxWidth:500,maxHeight:"92vh",overflowY:"auto",position:"relative"}}>
+        <button onClick={onClose} style={{position:"absolute",top:14,right:18,background:G.light,border:"none",borderRadius:"50%",width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center",color:G.gray}}>✕</button>
+        <div style={{width:40,height:4,background:"#E5E7EB",borderRadius:4,margin:"0 auto 18px"}}/>
+
+        {/* Worker mini card */}
+        <div style={{background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",border:"1.5px solid rgba(0,135,81,.2)",borderRadius:12,padding:"12px 14px",marginBottom:18,display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:"2rem",width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:10,background:AVATAR_BG[worker.cat]}}>{worker.avatar}</div>
+          <div>
+            <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.92rem"}}>{worker.name}</div>
+            <div style={{fontSize:"0.75rem",color:G.green}}>{worker.skill}</div>
+            <div style={{fontSize:"0.72rem",color:G.gray}}>💰 {fmtPrice(worker)}</div>
+          </div>
+        </div>
+
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1rem",fontWeight:800,marginBottom:4}}>📋 Request a Quote</div>
+        <div style={{fontSize:"0.8rem",color:G.gray,marginBottom:16,lineHeight:1.5}}>Describe your job. The worker will review and send you a price quote before any payment.</div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+          <div>{lbl("Your Name",true)}<input style={inp("customerName")} value={form.customerName} onChange={set("customerName")} placeholder="e.g. Emeka"/>{err("customerName")}</div>
+          <div>{lbl("Phone",true)}<input style={inp("customerPhone")} value={form.customerPhone} onChange={set("customerPhone")} placeholder="08012345678" type="tel"/>{err("customerPhone")}</div>
+        </div>
+        <div style={{marginBottom:10}}>{lbl("Email",true)}<input style={inp("customerEmail")} value={form.customerEmail} onChange={set("customerEmail")} placeholder="yourname@email.com" type="email"/>{err("customerEmail")}</div>
+        <div style={{marginBottom:10}}>{lbl("Job Title",true)}<input style={inp("jobTitle")} value={form.jobTitle} onChange={set("jobTitle")} placeholder="e.g. Deep clean 3-bedroom flat"/>{err("jobTitle")}</div>
+        <div style={{marginBottom:10}}>{lbl("Job Description",true)}<textarea value={form.jobDesc} onChange={set("jobDesc")} placeholder="Describe the job in detail — size, location, specific requirements, what you need done…" style={{...inp("jobDesc"),resize:"vertical",minHeight:90}}/>{err("jobDesc")}</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+          <div>{lbl("Preferred Date")}<input style={inp()} value={form.jobDate} onChange={set("jobDate")} type="date"/></div>
+          <div>{lbl("Location")}<input style={inp()} value={form.jobLocation} onChange={set("jobLocation")} placeholder="e.g. Lekki, Lagos"/></div>
+        </div>
+
+        <div style={{background:"rgba(245,158,11,.08)",border:"1px solid rgba(245,158,11,.25)",borderRadius:10,padding:"10px 13px",marginBottom:16,fontSize:"0.78rem",color:"#92400E",lineHeight:1.5}}>
+          💡 <strong>No payment yet.</strong> The worker will review your request and send a quote. You only pay the 10% platform fee once you agree on a price.
+        </div>
+
+        <button onClick={submit} style={{width:"100%",background:"linear-gradient(135deg,#008751,#00b86a)",color:"#fff",border:"none",borderRadius:12,padding:14,fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",boxShadow:"0 4px 16px rgba(0,135,81,.3)"}}>
+          📤 Send Quote Request
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  QUOTE THREAD MODAL  (chat + quote negotiation)
+// ═══════════════════════════════════════════════════════════════
+function QuoteThreadModal({ quote, isWorker, onClose, onUpdate }) {
+  const [msg, setMsg]           = useState("");
+  const [offerAmt, setOfferAmt] = useState("");
+  const [showOffer, setShowOffer] = useState(false);
+  const [paying, setPaying]     = useState(false);
+
+  const sendMsg = () => {
+    if (!msg.trim()) return;
+    const updated = { ...quote, messages: [...quote.messages, { from: isWorker?"worker":"customer", text: msg.trim(), time: new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) }] };
+    onUpdate(updated); setMsg("");
+  };
+
+  const sendQuote = () => {
+    const amt = parseInt(offerAmt);
+    if (!amt || amt < 1) return;
+    const label = isWorker ? "worker" : "customer";
+    const text = isWorker
+      ? `My quote for this job: ₦${fmt(amt)} ${quote.unit}. Please review and let me know if you'd like to proceed.`
+      : `I'd like to offer ₦${fmt(amt)} ${quote.unit} for this job.`;
+    const updated = { ...quote,
+      workerPrice: isWorker ? amt : quote.workerPrice,
+      status: "countered",
+      messages: [...quote.messages, { from: label, text, time: new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}), isQuote:true, amount:amt }]
+    };
+    onUpdate(updated); setOfferAmt(""); setShowOffer(false);
+  };
+
+  const acceptQuote = (amt) => {
+    const updated = { ...quote, agreedPrice: amt, status:"accepted",
+      messages: [...quote.messages, { from: isWorker?"worker":"customer", text:`✅ Quote accepted! Agreed price: ₦${fmt(amt)} ${quote.unit}. Proceeding to payment.`, time: new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}), isSystem:true }]
+    };
+    onUpdate(updated);
+  };
+
+  const declineQuote = () => {
+    const updated = { ...quote, status:"declined",
+      messages: [...quote.messages, { from: isWorker?"worker":"customer", text:"❌ Quote declined.", time: new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}), isSystem:true }]
+    };
+    onUpdate(updated);
+  };
+
+  const handlePayment = () => {
+    if (!quote.agreedPrice) return;
+    const fee = Math.round(quote.agreedPrice * PLATFORM_FEE_PCT / 100);
+    openPaystack({
+      email: quote.customerEmail || "customer@naijaskills.com",
+      amountNaira: fee,
+      metadata: { type:"contact_fee", worker: quote.workerName, job: quote.jobTitle, agreed_price: quote.agreedPrice, fee },
+      onSuccess: res => {
+        const updated = { ...quote, status:"paid", payRef: res.reference,
+          messages: [...quote.messages, { from:"system", text:`💳 Payment confirmed! ₦${fmt(fee)} platform fee paid. Ref: ${res.reference}. Worker contact: ${quote.workerPhone}`, time: new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}), isSystem:true }]
+        };
+        onUpdate(updated); setPaying(false);
+      },
+      onClose: () => setPaying(false),
+    });
+    setPaying(true);
+  };
+
+  const statusColors = { pending:{bg:"rgba(245,158,11,.1)",color:"#92400E"}, accepted:{bg:"rgba(0,135,81,.1)",color:G.green}, declined:{bg:"rgba(220,38,38,.1)",color:G.red}, countered:{bg:"rgba(37,99,235,.1)",color:G.blue}, paid:{bg:"rgba(0,135,81,.15)",color:G.greenDark} };
+  const sc = statusColors[quote.status] || statusColors.pending;
+
+  const latestQuoteMsg = [...quote.messages].reverse().find(m => m.isQuote);
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:350,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="slide-up" style={{background:"#fff",borderRadius:"24px 24px 0 0",width:"100%",maxWidth:520,height:"88vh",display:"flex",flexDirection:"column",position:"relative"}}>
+
+        {/* Header */}
+        <div style={{padding:"16px 18px 12px",borderBottom:"1px solid #E5E7EB",flexShrink:0}}>
+          <button onClick={onClose} style={{position:"absolute",top:14,right:18,background:G.light,border:"none",borderRadius:"50%",width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center",color:G.gray}}>✕</button>
+          <div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",paddingRight:36,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{quote.jobTitle}</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4,flexWrap:"wrap"}}>
+            <span style={{fontSize:"0.75rem",color:G.gray}}>{isWorker ? quote.customerName : quote.workerName} · {quote.createdAt}</span>
+            <span style={{background:sc.bg,color:sc.color,padding:"2px 10px",borderRadius:50,fontSize:"0.68rem",fontWeight:700,fontFamily:"Syne,sans-serif"}}>{QUOTE_STATUSES[quote.status]}</span>
+            {quote.agreedPrice && <span style={{background:"rgba(0,135,81,.1)",color:G.green,padding:"2px 10px",borderRadius:50,fontSize:"0.68rem",fontWeight:700}}>Agreed: ₦{fmt(quote.agreedPrice)}</span>}
+          </div>
+        </div>
+
+        {/* Job summary */}
+        <div style={{padding:"10px 18px",background:"#F9FAFB",borderBottom:"1px solid #E5E7EB",flexShrink:0}}>
+          <div style={{fontSize:"0.75rem",color:G.gray,display:"flex",gap:14,flexWrap:"wrap"}}>
+            {quote.jobDate && <span>📅 {quote.jobDate}</span>}
+            {quote.jobLocation && <span>📍 {quote.jobLocation}</span>}
+            <span>💰 Worker rate: {fmtPrice({rate:quote.workerPrice||0,priceType:quote.workerPrice?"fixed":"negotiable",priceUnit:quote.unit})}</span>
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}}>
+          {quote.messages.map((m, i) => {
+            const isMe = (isWorker && m.from==="worker") || (!isWorker && m.from==="customer");
+            const isSystem = m.isSystem || m.from==="system";
+            if (isSystem) return (
+              <div key={i} className="msg-in" style={{textAlign:"center",fontSize:"0.75rem",color:G.gray,background:"#F3F4F6",borderRadius:8,padding:"6px 12px",margin:"4px 20px"}}>{m.text}</div>
+            );
+            return (
+              <div key={i} className="msg-in" style={{display:"flex",flexDirection:"column",alignItems:isMe?"flex-end":"flex-start"}}>
+                {!isMe && <div style={{fontSize:"0.65rem",color:G.gray,marginBottom:2,marginLeft:4}}>{m.from==="worker"?quote.workerName:quote.customerName}</div>}
+                <div style={{maxWidth:"78%",background:m.isQuote?(isMe?"linear-gradient(135deg,#008751,#00b86a)":"linear-gradient(135deg,#1E40AF,#2563EB)"):(isMe?"#111827":"#F3F4F6"),color:m.isQuote?"#fff":(isMe?"#fff":G.dark),borderRadius:isMe?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"10px 14px",fontSize:"0.84rem",lineHeight:1.5}}>
+                  {m.isQuote && <div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"1rem",marginBottom:4}}>💰 ₦{fmt(m.amount)} {quote.unit}</div>}
+                  {m.text}
+                  {/* Accept/decline buttons for received quote */}
+                  {m.isQuote && !isMe && quote.status!=="accepted" && quote.status!=="paid" && quote.status!=="declined" && (
+                    <div style={{display:"flex",gap:6,marginTop:10}}>
+                      <button onClick={()=>acceptQuote(m.amount)} style={{flex:1,background:"rgba(255,255,255,.2)",border:"1.5px solid rgba(255,255,255,.5)",color:"#fff",borderRadius:8,padding:"6px 0",fontSize:"0.75rem",fontFamily:"Syne,sans-serif",fontWeight:700}}>✅ Accept</button>
+                      <button onClick={()=>declineQuote()} style={{flex:1,background:"rgba(255,255,255,.1)",border:"1.5px solid rgba(255,255,255,.3)",color:"rgba(255,255,255,.8)",borderRadius:8,padding:"6px 0",fontSize:"0.75rem"}}>❌ Decline</button>
+                      <button onClick={()=>setShowOffer(true)} style={{flex:1,background:"rgba(255,255,255,.1)",border:"1.5px solid rgba(255,255,255,.3)",color:"rgba(255,255,255,.8)",borderRadius:8,padding:"6px 0",fontSize:"0.75rem"}}>🔄 Counter</button>
+                    </div>
+                  )}
+                </div>
+                <div style={{fontSize:"0.62rem",color:G.gray,marginTop:2,marginLeft:4,marginRight:4}}>{m.time}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Accepted — pay now */}
+        {quote.status==="accepted" && (
+          <div style={{padding:"12px 16px",background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",borderTop:"1px solid rgba(0,135,81,.2)",flexShrink:0}}>
+            <div style={{fontSize:"0.82rem",color:G.greenDark,marginBottom:8,fontWeight:600}}>✅ Quote accepted at ₦{fmt(quote.agreedPrice)} {quote.unit}</div>
+            <div style={{fontSize:"0.75rem",color:G.gray,marginBottom:10}}>Pay the 10% platform fee (₦{fmt(Math.round(quote.agreedPrice*PLATFORM_FEE_PCT/100))}) to unlock {quote.workerPhone ? quote.workerName+"'s" : "the worker's"} contact details.</div>
+            <button onClick={handlePayment} disabled={paying} style={{width:"100%",background:G.green,color:"#fff",border:"none",borderRadius:10,padding:"12px",fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.9rem",opacity:paying?.6:1}}>
+              {paying?"Opening Paystack…":`💳 Pay ₦${fmt(Math.round(quote.agreedPrice*PLATFORM_FEE_PCT/100))} & Get Contact`}
+            </button>
+          </div>
+        )}
+
+        {/* Paid — show contact */}
+        {quote.status==="paid" && (
+          <div style={{padding:"12px 16px",background:"linear-gradient(135deg,#F0FDF4,#DCFCE7)",borderTop:"1px solid rgba(0,135,81,.2)",flexShrink:0,textAlign:"center"}}>
+            <div style={{fontSize:"0.8rem",color:G.greenDark,fontWeight:700,marginBottom:8}}>💳 Paid · Worker Contact Unlocked</div>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.1rem",fontWeight:800,marginBottom:10}}>{quote.workerPhone}</div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>window.location.href=`tel:+234${quote.workerPhone.substring(1)}`} style={{flex:1,padding:10,borderRadius:10,border:"none",background:G.green,color:"#fff",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.82rem"}}>📞 Call</button>
+              <button onClick={()=>window.open(`https://wa.me/234${quote.workerPhone.substring(1)}`,"_blank")} style={{flex:1,padding:10,borderRadius:10,border:"none",background:"#25D366",color:"#fff",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.82rem"}}>💬 WhatsApp</button>
+            </div>
+          </div>
+        )}
+
+        {/* Input area */}
+        {quote.status!=="paid" && quote.status!=="declined" && (
+          <div style={{padding:"10px 14px",borderTop:"1px solid #E5E7EB",flexShrink:0,background:"#fff"}}>
+            {/* Counter offer input */}
+            {showOffer && (
+              <div style={{background:"#F9FAFB",borderRadius:10,padding:"10px 12px",marginBottom:8,display:"flex",gap:8,alignItems:"center"}}>
+                <span style={{fontSize:"0.82rem",fontWeight:600,color:G.dark,whiteSpace:"nowrap"}}>₦ Offer:</span>
+                <input type="number" value={offerAmt} onChange={e=>setOfferAmt(e.target.value)} placeholder="Enter amount" style={{flex:1,border:"1.5px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:"0.85rem",outline:"none"}}/>
+                <button onClick={sendQuote} style={{background:G.green,color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.8rem"}}>Send</button>
+                <button onClick={()=>setShowOffer(false)} style={{background:G.light,color:G.gray,border:"none",borderRadius:8,padding:"7px 10px",fontSize:"0.8rem"}}>✕</button>
+              </div>
+            )}
+            <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+              <textarea value={msg} onChange={e=>setMsg(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();} }} placeholder="Type a message…" style={{flex:1,border:"1.5px solid #E5E7EB",borderRadius:12,padding:"10px 12px",fontSize:"0.85rem",resize:"none",height:44,outline:"none",lineHeight:1.4}}/>
+              {isWorker && !showOffer && quote.status!=="accepted" && (
+                <button onClick={()=>setShowOffer(true)} style={{background:"rgba(0,135,81,.1)",color:G.green,border:"1.5px solid rgba(0,135,81,.2)",borderRadius:10,padding:"10px 10px",fontSize:"0.75rem",fontFamily:"Syne,sans-serif",fontWeight:700,whiteSpace:"nowrap",height:44}}>💰 Quote</button>
+              )}
+              {!isWorker && !showOffer && quote.status==="countered" && (
+                <button onClick={()=>setShowOffer(true)} style={{background:"rgba(37,99,235,.1)",color:G.blue,border:"1.5px solid rgba(37,99,235,.2)",borderRadius:10,padding:"10px 10px",fontSize:"0.75rem",fontFamily:"Syne,sans-serif",fontWeight:700,whiteSpace:"nowrap",height:44}}>🔄 Counter</button>
+              )}
+              <button onClick={sendMsg} style={{background:G.green,color:"#fff",border:"none",borderRadius:10,padding:"10px 14px",fontSize:"1rem",height:44}}>➤</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  QUOTES PAGE  (customer or worker views all their quotes)
+// ═══════════════════════════════════════════════════════════════
+function QuotesPage({ quotes, onUpdateQuote }) {
+  const [view, setView]         = useState("customer"); // "customer" | "worker"
+  const [openQuote, setOpenQuote] = useState(null);
+  const [search, setSearch]     = useState("");
+
+  const filtered = quotes.filter(q => {
+    const matchView = view==="worker" ? true : true; // in real app filter by logged-in user
+    const q2 = search.toLowerCase();
+    return !q2 || q.jobTitle.toLowerCase().includes(q2) || q.workerName.toLowerCase().includes(q2) || q.customerName.toLowerCase().includes(q2);
+  });
+
+  const statusColors = { pending:{bg:"rgba(245,158,11,.1)",color:"#92400E"}, accepted:{bg:"rgba(0,135,81,.1)",color:G.green}, declined:{bg:"rgba(220,38,38,.1)",color:G.red}, countered:{bg:"rgba(37,99,235,.1)",color:G.blue}, paid:{bg:"rgba(0,135,81,.15)",color:G.greenDark} };
+
+  const tabS = v => ({ padding:"8px 16px", borderRadius:50, fontSize:"0.8rem", fontWeight:600, border:`1.5px solid ${view===v?G.green:"#E5E7EB"}`, background:view===v?G.green:"#fff", color:view===v?"#fff":G.gray, cursor:"pointer", fontFamily:"Syne,sans-serif" });
+
+  return (
+    <div style={{padding:"20px 18px 40px"}}>
+      <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800,marginBottom:4}}>📋 Quotations</div>
+      <div style={{fontSize:"0.83rem",color:G.gray,marginBottom:16}}>Track all job quote requests and negotiations</div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:20}}>
+        {[
+          [quotes.length,"Total","📋"],
+          [quotes.filter(q=>q.status==="pending").length,"Pending","⏳"],
+          [quotes.filter(q=>q.status==="accepted"||q.status==="countered").length,"Active","🔄"],
+          [quotes.filter(q=>q.status==="paid").length,"Paid","💳"],
+        ].map(([n,l,i])=>(
+          <div key={l} style={{background:"#fff",borderRadius:14,padding:"12px 8px",textAlign:"center",boxShadow:"0 2px 12px rgba(0,0,0,.06)"}}>
+            <div style={{fontSize:"1rem",marginBottom:3}}>{i}</div>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:"0.95rem",fontWeight:800,color:G.green}}>{n}</div>
+            <div style={{fontSize:"0.6rem",color:G.gray,textTransform:"uppercase",letterSpacing:"0.6px"}}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:14}}>
+        <button style={tabS("customer")} onClick={()=>setView("customer")}>👤 As Customer</button>
+        <button style={tabS("worker")}   onClick={()=>setView("worker")}>🔧 As Worker</button>
+      </div>
+
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search quotes…" style={{width:"100%",border:"1.5px solid #E5E7EB",borderRadius:10,padding:"10px 14px",fontSize:"0.88rem",outline:"none",marginBottom:14}}/>
+
+      {filtered.length===0 && <div style={{textAlign:"center",padding:"40px 0",color:G.gray}}><div style={{fontSize:"2rem",marginBottom:8}}>📋</div>No quotes yet.</div>}
+
+      {filtered.map(q => {
+        const sc = statusColors[q.status] || statusColors.pending;
+        const unread = q.messages.filter(m=> view==="customer" ? m.from==="worker" : m.from==="customer").length;
+        const latestMsg = q.messages[q.messages.length-1];
+        return (
+          <div key={q.id} className="quote-card" onClick={()=>setOpenQuote(q)}
+            style={{background:"#fff",borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:"0 2px 12px rgba(0,0,0,.06)",cursor:"pointer",borderLeft:`4px solid ${sc.color}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.9rem",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{q.jobTitle}</div>
+                <div style={{fontSize:"0.75rem",color:G.gray,marginTop:2}}>{view==="customer"?`Worker: ${q.workerName}`:`Customer: ${q.customerName}`} · {q.createdAt}</div>
+                {latestMsg && <div style={{fontSize:"0.75rem",color:G.gray,marginTop:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontStyle:"italic"}}>"{latestMsg.text.substring(0,60)}{latestMsg.text.length>60?"…":""}"</div>}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                <span style={{background:sc.bg,color:sc.color,padding:"2px 9px",borderRadius:50,fontSize:"0.65rem",fontWeight:700,fontFamily:"Syne,sans-serif"}}>{QUOTE_STATUSES[q.status]}</span>
+                {q.agreedPrice && <span style={{fontSize:"0.72rem",color:G.green,fontWeight:700}}>₦{fmt(q.agreedPrice)}</span>}
+                <span style={{fontSize:"0.65rem",color:G.gray}}>{q.messages.length} msg{q.messages.length!==1?"s":""}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {openQuote && (
+        <QuoteThreadModal
+          quote={quotes.find(q=>q.id===openQuote.id)||openQuote}
+          isWorker={view==="worker"}
+          onClose={()=>setOpenQuote(null)}
+          onUpdate={updated=>{ onUpdateQuote(updated); setOpenQuote(updated); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  HEADER
+// ═══════════════════════════════════════════════════════════════
+function Header({ page, setPage }) {
+  const nb = (pg, gold) => ({
+    padding:"7px 12px", borderRadius:50,
+    border:`1.5px solid ${gold?"#F5A623":"rgba(255,255,255,.4)"}`,
+    background: page===pg?"#fff":gold?"#F5A623":"transparent",
+    color: page===pg?G.greenDark:gold?G.dark:"#fff",
+    fontFamily:"Syne,sans-serif", fontSize:"0.72rem", fontWeight:600, transition:"all .2s",
+  });
+  return (
+    <header style={{background:"linear-gradient(135deg,#005c38,#008751,#00b86a)",position:"sticky",top:0,zIndex:100,boxShadow:"0 2px 16px rgba(0,0,0,.18)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 18px"}}>
+        <div>
+          <div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"1.4rem",color:"#fff"}}>Naija<span style={{color:"#F5A623"}}>Skills</span></div>
+          <div style={{fontSize:"0.6rem",color:"rgba(255,255,255,.65)",letterSpacing:"1.5px",textTransform:"uppercase",marginTop:-2}}>Nigeria's Skill Directory</div>
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <button style={nb("directory")}       onClick={()=>setPage("directory")}>🔍 Directory</button>
+          <button style={nb("register",true)}   onClick={()=>setPage("register")}>+ Register</button>
+          <button style={nb("quotes")}          onClick={()=>setPage("quotes")}>📋 Quotes</button>
+          <button style={nb("admin")}           onClick={()=>setPage("admin")}>🛡️ Admin</button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  WORKER CARD
+// ═══════════════════════════════════════════════════════════════
+function WorkerCard({ worker, index, onOpen, onContact, onQuote }) {
+  const T = worker.trusted;
+  return (
+    <div className={`fade-up${T?" trusted-card":""}`}
+      style={{background:T?"linear-gradient(135deg,#FFFDF0,#FFF9E0)":"#fff",borderRadius:16,overflow:"hidden",boxShadow:"0 4px 24px rgba(0,135,81,.1)",transition:"transform .2s,box-shadow .2s",cursor:"pointer",display:"flex",flexDirection:"column",animationDelay:`${index*0.05}s`}}
+      onClick={()=>onOpen(worker)}>
+      <div style={{width:"100%",aspectRatio:"1",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"2.5rem",position:"relative",background:T?TRUSTED_BG:AVATAR_BG[worker.cat]}}>
+        {worker.avatar}
+        <div style={{position:"absolute",top:8,right:8,display:"flex",flexDirection:"column",gap:3,alignItems:"flex-end"}}>
+          {T ? <TrustedBadge/> : worker.verified && <span style={{background:"#F5A623",color:"#111",fontSize:"0.55rem",fontWeight:700,fontFamily:"Syne,sans-serif",padding:"2px 7px",borderRadius:50}}>✓ Verified</span>}
+        </div>
+      </div>
+      <div style={{padding:"10px 10px 12px",flex:1,display:"flex",flexDirection:"column",gap:3}}>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"0.83rem",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{worker.name}</div>
+        <div style={{fontSize:"0.7rem",color:T?TRUSTED_GOLD:G.green,fontWeight:600}}>{worker.skill}</div>
+        <div style={{fontSize:"0.65rem",color:G.gray}}>📍 {worker.city}, {worker.state}</div>
+        <div style={{display:"flex",alignItems:"center",gap:2,marginTop:4,fontSize:"0.68rem",color:"#F5A623"}}>{stars(worker.rating)}<span style={{fontSize:"0.63rem",color:G.gray,marginLeft:2}}>({worker.reviews})</span></div>
+        <div style={{fontSize:"0.67rem",color:T?TRUSTED_GOLD:G.green,fontWeight:600}}>{fmtPrice(worker)} · 10% fee</div>
+        <div style={{display:"flex",gap:5,marginTop:8}}>
+          <button onClick={e=>{e.stopPropagation();onQuote(worker)}} style={{flex:1,background:T?"linear-gradient(135deg,#DAA520,#B8860B)":G.green,color:"#fff",border:"none",borderRadius:8,padding:"7px 0",fontSize:"0.7rem",fontFamily:"Syne,sans-serif",fontWeight:600}}>📋 Get Quote</button>
+          <button onClick={e=>{e.stopPropagation();onContact(worker,"call")}} style={{background:G.light,color:G.dark,border:"none",borderRadius:8,padding:"7px 10px",fontSize:"0.7rem"}}>📞</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  WORKER DETAIL MODAL
+// ═══════════════════════════════════════════════════════════════
+function WorkerModal({ worker, onClose, onContact, onQuote }) {
+  if (!worker) return null;
+  const T = worker.trusted;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="slide-up" style={{background:"#fff",borderRadius:"24px 24px 0 0",padding:"24px 22px 38px",width:"100%",maxWidth:500,position:"relative",maxHeight:"90vh",overflowY:"auto",border:T?`3px solid ${TRUSTED_BORDER}`:"none"}}>
+        <button onClick={onClose} style={{position:"absolute",top:14,right:18,background:G.light,border:"none",borderRadius:"50%",width:30,height:30,display:"flex",alignItems:"center",justifyContent:"center",color:G.gray}}>✕</button>
+        <div style={{width:40,height:4,background:"#E5E7EB",borderRadius:4,margin:"0 auto 18px"}}/>
+        {T&&<div style={{background:"linear-gradient(135deg,#DAA520,#FFD700)",borderRadius:12,padding:"10px 14px",marginBottom:14,textAlign:"center"}}><div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",color:"#3D2800"}}>👑 Personally Trusted by NaijaSkills Owner</div><div style={{fontSize:"0.75rem",color:"#6B4500",marginTop:2}}>Personally vetted and recommended</div></div>}
+        <div style={{fontSize:"3.8rem",textAlign:"center",marginBottom:6}}>{worker.avatar}</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800,textAlign:"center"}}>{worker.name}</div>
+        <div style={{display:"flex",justifyContent:"center",gap:6,margin:"6px 0 10px",flexWrap:"wrap"}}>
+          {T?<TrustedBadge size="lg"/>:worker.verified&&<span style={{background:"rgba(245,166,35,.15)",color:"#7C5A00",padding:"3px 10px",borderRadius:50,fontSize:"0.75rem",fontWeight:600}}>✓ Verified</span>}
+        </div>
+        <div style={{textAlign:"center",color:G.green,fontWeight:500,marginBottom:4}}>{worker.skill} · {worker.cat}</div>
+        <div style={{textAlign:"center",color:G.gray,fontSize:"0.83rem",marginBottom:6}}>📍 {worker.city}, {worker.state} · ⭐ {worker.rating} ({worker.reviews} reviews)</div>
+        <div style={{textAlign:"center",marginBottom:14}}><span style={{background:"rgba(0,135,81,.1)",color:G.green,padding:"4px 14px",borderRadius:50,fontSize:"0.82rem",fontWeight:700,fontFamily:"Syne,sans-serif"}}>💰 {fmtPrice(worker)}</span></div>
+        <div style={{background:G.light,borderRadius:12,padding:"12px 14px",marginBottom:14,fontSize:"0.85rem",lineHeight:1.6}}>{worker.bio}</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>{worker.tags.map((t,i)=><span key={t} style={{background:T?"rgba(218,165,32,.12)":tagColor(i).bg,color:T?TRUSTED_GOLD:tagColor(i).color,border:`1px solid ${T?"rgba(218,165,32,.4)":tagColor(i).border}`,padding:"4px 12px",borderRadius:50,fontSize:"0.72rem",fontWeight:600,letterSpacing:"0.2px"}}>{t}</span>)}</div>
+        <div style={{background:"linear-gradient(135deg,#FFF8E1,#FFFDE7)",border:"1.5px solid #F5A623",borderRadius:12,padding:"12px 14px",marginBottom:16,fontSize:"0.82rem",color:"#7C5A00"}}>
+          <strong style={{fontFamily:"Syne,sans-serif",display:"block",marginBottom:2,color:"#5C4000"}}>💰 Contact Fee Notice</strong>
+          A <strong>10% platform fee</strong> is charged on the agreed job amount.
+        </div>
+        <button onClick={()=>onQuote(worker)} style={{width:"100%",background:"linear-gradient(135deg,#008751,#00b86a)",color:"#fff",border:"none",borderRadius:12,padding:13,fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",marginBottom:10,boxShadow:"0 4px 14px rgba(0,135,81,.3)"}}>📋 Request a Quote (Free)</button>
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={()=>onContact(worker,"call")} style={{flex:1,background:G.light,color:G.dark,border:"1.5px solid #E5E7EB",borderRadius:12,padding:11,fontFamily:"Syne,sans-serif",fontWeight:600,fontSize:"0.85rem"}}>📞 Direct Call</button>
+          <button onClick={()=>onContact(worker,"whatsapp")} style={{flex:1,background:"#25D366",color:"#fff",border:"none",borderRadius:12,padding:11,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.85rem"}}>💬 WhatsApp</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PAYMENT MODAL (10% contact fee)
+// ═══════════════════════════════════════════════════════════════
+function PaymentModal({ worker, onClose, onSuccess }) {
+  const [jobAmt,setJobAmt]=useState(""); const [email,setEmail]=useState(""); const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
+  const job=parseInt(jobAmt)||0; const fee=Math.round(job*PLATFORM_FEE_PCT/100);
+  const inp={width:"100%",border:"1.5px solid #E5E7EB",borderRadius:10,padding:"11px 13px",fontSize:"0.9rem",outline:"none"};
+  const pay=()=>{
+    if(!email){setErr("Please enter your email.");return;}
+    if(job<100){setErr("Minimum ₦100.");return;}
+    setErr(""); setLoading(true);
+    openPaystack({email,amountNaira:fee,metadata:{worker_name:worker.name,job_amount:job,platform_fee:fee},onSuccess:res=>{setLoading(false);onSuccess(job,fee,res.reference);},onClose:()=>setLoading(false)});
+  };
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:18}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,padding:"26px 22px 28px",width:"100%",maxWidth:400}}>
+        <div style={{fontSize:"2.6rem",textAlign:"center",marginBottom:6}}>💳</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.15rem",fontWeight:800,textAlign:"center",marginBottom:6}}>Contact Fee Payment</div>
+        <div style={{textAlign:"center",fontSize:"0.82rem",color:G.gray,marginBottom:16}}>Contacting {worker.name} — pay 10% of job amount</div>
+        <div style={{marginBottom:12}}><label style={{fontSize:"0.8rem",fontWeight:600}}>📧 Email <span style={{color:G.red}}>*</span></label><input style={{...inp,marginTop:4}} type="email" placeholder="yourname@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></div>
+        <div style={{marginBottom:12}}><label style={{fontSize:"0.8rem",fontWeight:600}}>💼 Job Amount <span style={{color:G.red}}>*</span></label><div style={{display:"flex",alignItems:"center",marginTop:4}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"11px 13px",fontWeight:700,color:G.gray}}>₦</span><input style={{...inp,borderLeft:"none",borderRadius:"0 10px 10px 0"}} type="number" min="0" placeholder="e.g. 10000" value={jobAmt} onChange={e=>setJobAmt(e.target.value)}/></div></div>
+        <div style={{background:"linear-gradient(135deg,#008751,#00b86a)",borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div><div style={{fontSize:"0.78rem",color:"rgba(255,255,255,.85)"}}>10% Fee</div><div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800,color:"#fff"}}>₦{fmt(fee)}</div></div>
+          <div style={{textAlign:"right"}}><div style={{fontSize:"0.78rem",color:"rgba(255,255,255,.75)"}}>Job Amount</div><div style={{fontFamily:"Syne,sans-serif",fontSize:"0.95rem",fontWeight:700,color:"rgba(255,255,255,.9)"}}>₦{fmt(job)}</div></div>
+        </div>
+        {err&&<div style={{color:G.red,fontSize:"0.78rem",textAlign:"center",marginBottom:8}}>{err}</div>}
+        <button onClick={pay} disabled={loading} style={{width:"100%",background:G.green,color:"#fff",border:"none",borderRadius:12,padding:14,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.95rem",marginBottom:8,opacity:loading?.6:1}}>{loading?"Opening Paystack…":"✅ Pay & Get Contact Details"}</button>
+        <button onClick={onClose} style={{width:"100%",background:"none",border:"none",color:G.gray,fontSize:"0.82rem",padding:6}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function SuccessModal({ worker, job, fee, ref: reference, onClose }) {
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,padding:"32px 22px",width:"100%",maxWidth:360,textAlign:"center"}}>
+        <div style={{fontSize:"3.5rem",marginBottom:12}}>✅</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.2rem",fontWeight:800,marginBottom:8,color:G.green}}>Payment Successful!</div>
+        <div style={{fontSize:"0.85rem",color:G.gray,lineHeight:1.6,marginBottom:14}}>You've unlocked {worker.name}'s contact.</div>
+        <div style={{background:"rgba(0,135,81,.08)",borderRadius:10,padding:"8px 14px",marginBottom:14,fontSize:"0.78rem",color:G.greenDark,fontWeight:600}}>Job: ₦{fmt(job)} · Fee: ₦{fmt(fee)} · Ref: {reference}</div>
+        <div style={{background:G.light,borderRadius:12,padding:14,marginBottom:18}}><div style={{fontSize:"0.7rem",color:G.gray,textTransform:"uppercase",letterSpacing:"0.8px",marginBottom:4}}>📞 Phone Number</div><div style={{fontFamily:"Syne,sans-serif",fontSize:"1.1rem",fontWeight:700}}>{worker.phone}</div></div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>window.location.href=`tel:+234${worker.phone.substring(1)}`} style={{flex:1,padding:12,borderRadius:10,border:"none",background:G.green,color:"#fff",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.85rem"}}>📞 Call</button>
+          <button onClick={()=>window.open(`https://wa.me/234${worker.phone.substring(1)}`,"_blank")} style={{flex:1,padding:12,borderRadius:10,border:"none",background:"#25D366",color:"#fff",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.85rem"}}>💬 WhatsApp</button>
+        </div>
+        <button onClick={onClose} style={{marginTop:10,width:"100%",background:"none",border:"none",color:G.gray,fontSize:"0.8rem"}}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DIRECTORY PAGE
+// ═══════════════════════════════════════════════════════════════
+function DirectoryPage({ workers, onAddQuote }) {
+  const [search,setSearch]=useState(""); const [category,setCategory]=useState("all");
+  const [selected,setSelected]=useState(null); const [paying,setPaying]=useState(null); const [success,setSuccess]=useState(null); const [quoting,setQuoting]=useState(null);
+  const handleContact=(w,t)=>{setSelected(null);setPaying({worker:w,type:t});};
+  const handleQuote=(w)=>{setSelected(null);setQuoting(w);};
+  const handleSuccess=(job,fee,ref)=>{setPaying(null);setSuccess({worker:paying.worker,job,fee,ref});};
+  const trusted=workers.filter(w=>w.trusted&&w.status==="approved");
+  const regular=useMemo(()=>workers.filter(w=>{
+    if(w.trusted||w.status!=="approved")return false;
+    const mc=category==="all"||w.cat===category;
+    const q=search.toLowerCase();
+    const ms=!q||[w.name,w.skill,w.city,w.state,...(w.tags||[])].some(x=>x.toLowerCase().includes(q));
+    return mc&&ms;
+  }),[workers,search,category]);
+  const tabS=cat=>({flexShrink:0,padding:"7px 14px",borderRadius:50,border:`1.5px solid ${category===cat?G.green:"#E5E7EB"}`,background:category===cat?G.green:"#fff",color:category===cat?"#fff":G.gray,fontSize:"0.8rem",fontWeight:500,transition:"all .2s"});
+  return (
+    <div>
+      <div style={{background:"linear-gradient(160deg,#008751,#005c38)",padding:"32px 18px 44px",textAlign:"center",position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",width:300,height:300,background:"rgba(255,255,255,.04)",borderRadius:"50%",top:-80,right:-80}}/>
+        <h1 style={{fontFamily:"Syne,sans-serif",fontSize:"1.9rem",fontWeight:800,color:"#fff",lineHeight:1.15,marginBottom:10,position:"relative",zIndex:1}}>Find <em style={{fontStyle:"normal",color:"#F5A623"}}>Skilled Workers</em><br/>Across Nigeria</h1>
+        <p style={{color:"rgba(255,255,255,.82)",fontSize:"0.95rem",marginBottom:22,position:"relative",zIndex:1}}>Connect with professionals · <strong style={{color:"#F5A623"}}>10% fee</strong> per contact</p>
+        <div style={{position:"relative",zIndex:1,display:"flex",background:"#fff",borderRadius:14,overflow:"hidden",boxShadow:"0 6px 28px rgba(0,0,0,.18)"}}>
+          <input style={{flex:1,border:"none",outline:"none",padding:"13px 16px",fontSize:"0.93rem"}} placeholder="Search name, skill, city, or tag…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          <button style={{background:"#F5A623",border:"none",padding:"0 18px",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.85rem",color:G.dark}}>Search</button>
+        </div>
+      </div>
+      <div style={{display:"flex",justifyContent:"center",gap:28,background:"#fff",padding:"14px 18px",borderBottom:"1px solid #E5E7EB"}}>
+        {[[workers.filter(w=>w.status==="approved").length,"Workers"],[trusted.length,"👑 Trusted"],["10%","Contact Fee"]].map(([n,l])=>(
+          <div key={l} style={{textAlign:"center"}}><div style={{fontFamily:"Syne,sans-serif",fontSize:"1.25rem",fontWeight:800,color:G.green}}>{n}</div><div style={{fontSize:"0.65rem",color:G.gray,textTransform:"uppercase",letterSpacing:"0.8px"}}>{l}</div></div>
+        ))}
+      </div>
+      <div style={{padding:"20px 18px"}}>
+        {trusted.length>0&&(
+          <div style={{marginBottom:28}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+              <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.05rem",fontWeight:800}}>👑 <span style={{color:TRUSTED_GOLD}}>Trusted by Owner</span></div>
+              <div style={{flex:1,height:"1px",background:"linear-gradient(90deg,#DAA520,transparent)"}}/>
+            </div>
+            <div style={{background:"linear-gradient(135deg,#FFFDF0,#FFF9DC)",border:`1.5px solid ${TRUSTED_BORDER}`,borderRadius:14,padding:"10px 14px",marginBottom:14,fontSize:"0.8rem",color:"#7C5A00"}}>👑 Personally vetted and trusted by the NaijaSkills owner. Hire with full confidence.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{trusted.map((w,i)=><WorkerCard key={w.id} worker={w} index={i} onOpen={setSelected} onContact={handleContact} onQuote={handleQuote}/>)}</div>
+          </div>
+        )}
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.05rem",fontWeight:700,marginBottom:12}}>Browse by <span style={{color:G.green}}>Category</span></div>
+        <div className="tabs" style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4,scrollbarWidth:"none",marginBottom:18}}>
+          {[["all","🔍 All"],["Home Services","🏠 Home"],["Construction & Trades","🏗️ Construction"],["Tech & IT","💻 Tech"],["Creative & Design","🎨 Creative"]].map(([v,l])=>(
+            <button key={v} style={tabS(v)} onClick={()=>setCategory(v)}>{l}</button>
+          ))}
+        </div>
+        {regular.length===0?<div style={{textAlign:"center",padding:"40px 20px",color:G.gray}}><div style={{fontSize:"2rem",marginBottom:8}}>🔍</div>No workers found.</div>:(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{regular.map((w,i)=><WorkerCard key={w.id} worker={w} index={i} onOpen={setSelected} onContact={handleContact} onQuote={handleQuote}/>)}</div>
+        )}
+      </div>
+      {selected&&<WorkerModal worker={selected} onClose={()=>setSelected(null)} onContact={handleContact} onQuote={handleQuote}/>}
+      {quoting&&<QuoteRequestModal worker={quoting} onClose={()=>setQuoting(null)} onSubmit={q=>{setQuoting(null);onAddQuote(q);}}/>}
+      {paying&&<PaymentModal worker={paying.worker} onClose={()=>setPaying(null)} onSuccess={handleSuccess}/>}
+      {success&&<SuccessModal {...success} onClose={()=>setSuccess(null)}/>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  REGISTER PAGE  (with ₦1,000 annual fee step)
+// ═══════════════════════════════════════════════════════════════
+function RegisterPage({ onRegister }) {
+  const empty={firstName:"",lastName:"",phone:"",whatsapp:"",email:"",skill:"",category:"",experience:"",priceType:"fixed",priceUnit:"per job",rate:"",rateMin:"",rateMax:"",bio:"",city:"",state:""};
+  const [form,setForm]=useState(empty); const [tags,setTags]=useState([]); const [tagIn,setTagIn]=useState("");
+  const [errs,setErrs]=useState({}); const [agreed,setAgreed]=useState(false);
+  const [step,setStep]=useState("form");        // "form" | "pay" | "done"
+  const [payInfo,setPayInfo]=useState(null);
+  const [pendingWorker,setPendingWorker]=useState(null);
+
+  const baseRate=parseInt(form.priceType==="range"?form.rateMin:form.rate)||0; const rate=baseRate; const fee=Math.round(baseRate*PLATFORM_FEE_PCT/100);
+  const set=k=>e=>setForm(f=>({...f,[k]:e.target.value}));
+  const addTag=e=>{ if((e.key==="Enter"||e.key===",")&&tagIn.trim()&&tags.length<MAX_TAGS){e.preventDefault();setTags(t=>[...t,tagIn.trim()]);setTagIn("");} };
+  const validate=()=>{
+    const e={};
+    ["firstName","lastName","phone","skill","category","experience","bio","city","state"].forEach(k=>{if(!form[k].trim())e[k]="Required";});
+    if(form.priceType==="fixed"&&!form.rate.trim())e.rate="Enter your fixed price";
+    if(form.priceType==="range"){if(!form.rateMin.trim())e.rateMin="Enter minimum price";if(!form.rateMax.trim())e.rateMax="Enter maximum price";if(parseInt(form.rateMin)>=parseInt(form.rateMax))e.rateMax="Max must be higher than min";}
+    if(form.bio.trim().length<40)e.bio="Minimum 40 characters";
+    if(tags.length===0)e.tags="Add at least one tag";
+    if(!agreed)e.terms="You must accept the terms";
+    return e;
+  };
+  const submit=()=>{
+    const e=validate(); if(Object.keys(e).length){setErrs(e);return;}
+    const catAv={"Home Services":"🛠️","Construction & Trades":"🏗️","Tech & IT":"💻","Creative & Design":"🎨"};
+    const w={id:uid(),name:`${form.firstName} ${form.lastName}`,skill:form.skill,cat:form.category,city:form.city,state:form.state,avatar:catAv[form.category]||"👷",rating:5.0,reviews:0,phone:form.phone,email:form.email,bio:form.bio,tags:[...tags],verified:false,rate:parseInt(form.priceType==="range"?form.rateMin:form.rate)||0,rateMin:parseInt(form.rateMin)||null,rateMax:parseInt(form.rateMax)||null,priceType:form.priceType,priceUnit:form.priceUnit,status:"pending",trusted:false,regPaid:false,regExpiry:null};
+    setPendingWorker(w);
+    setStep("pay");
+  };
+  const handlePaySuccess=(info)=>{
+    const w={...pendingWorker,regPaid:true,regExpiry:addYear(),regPayMethod:info.method,regRef:info.ref};
+    onRegister(w); setPayInfo(info); setStep("done");
+  };
+
+  const inp=k=>({width:"100%",border:`1.5px solid ${errs[k]?G.red:"#E5E7EB"}`,borderRadius:10,padding:"11px 13px",fontSize:"0.9rem",color:G.dark,outline:"none"});
+  const lbl=(t,req)=><label style={{display:"block",fontSize:"0.8rem",fontWeight:600,marginBottom:5}}>{t}{req&&<span style={{color:G.red}}> *</span>}</label>;
+  const errMsg=k=>errs[k]&&<div style={{fontSize:"0.72rem",color:G.red,marginTop:4}}>{errs[k]}</div>;
+  const sec=t=><div style={{fontFamily:"Syne,sans-serif",fontSize:"0.82rem",fontWeight:700,color:G.greenDark,textTransform:"uppercase",letterSpacing:1,margin:"22px 0 12px",display:"flex",alignItems:"center",gap:8}}>{t}<div style={{flex:1,height:1,background:"#E5E7EB"}}/></div>;
+
+  if (step==="done") return <RegSuccessModal workerData={pendingWorker} payInfo={payInfo} onClose={()=>{ setStep("form"); setForm(empty); setTags([]); setAgreed(false); setPendingWorker(null); setPayInfo(null); }}/>;
+
+  return (
+    <div>
+      {/* Pay modal on top of form when step=pay */}
+      {step==="pay"&&pendingWorker&&(
+        <RegFeeModal workerData={pendingWorker} onSuccess={handlePaySuccess} onClose={()=>setStep("form")}/>
+      )}
+
+      <div style={{background:"linear-gradient(135deg,#005c38,#008751)",padding:"30px 18px 38px",textAlign:"center"}}>
+        <h2 style={{fontFamily:"Syne,sans-serif",fontSize:"1.6rem",fontWeight:800,color:"#fff",marginBottom:6}}>Join NaijaSkills 🇳🇬</h2>
+        <p style={{color:"rgba(255,255,255,.8)",fontSize:"0.88rem"}}>List your skills, get found by customers across Nigeria</p>
+      </div>
+
+      {/* Fee banners */}
+      <div style={{padding:"0 18px",marginTop:-18,position:"relative",zIndex:2,display:"flex",flexDirection:"column",gap:10}}>
+        {/* Annual reg fee banner */}
+        <div style={{background:"linear-gradient(135deg,#1E40AF,#2563EB)",borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 4px 20px rgba(37,99,235,.3)"}}>
+          <div style={{fontSize:"2rem"}}>📋</div>
+          <div>
+            <div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.95rem",color:"#fff"}}>Annual Registration Fee: <span style={{fontSize:"1.2rem"}}>₦{fmt(REG_FEE)}</span></div>
+            <div style={{fontSize:"0.74rem",color:"rgba(255,255,255,.8)",lineHeight:1.4,marginTop:2}}>Paid once a year. Pay via Paystack or bank transfer.</div>
+          </div>
+        </div>
+        {/* 10% fee banner */}
+        <div style={{background:"linear-gradient(135deg,#F5A623,#FFD080)",borderRadius:14,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,boxShadow:"0 4px 20px rgba(245,166,35,.3)"}}>
+          <div style={{fontSize:"1.6rem"}}>💰</div>
+          <div>
+            <div style={{fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.88rem",color:"#3D2800"}}>+ 10% Contact Fee per job</div>
+            <div style={{fontSize:"0.72rem",color:"#6B4500",marginTop:2}}>Charged each time a customer contacts you</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{padding:"20px 18px 40px"}}>
+        {sec("👤 Personal Information")}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          <div>{lbl("First Name",true)}<input style={inp("firstName")} value={form.firstName} onChange={set("firstName")} placeholder="e.g. Chidi"/>{errMsg("firstName")}</div>
+          <div>{lbl("Last Name",true)}<input style={inp("lastName")} value={form.lastName} onChange={set("lastName")} placeholder="e.g. Okafor"/>{errMsg("lastName")}</div>
+        </div>
+        <div style={{marginBottom:14}}>{lbl("Phone",true)}<input style={inp("phone")} value={form.phone} onChange={set("phone")} placeholder="08012345678" type="tel"/>{errMsg("phone")}</div>
+        <div style={{marginBottom:14}}>{lbl("WhatsApp")}<input style={inp()} value={form.whatsapp} onChange={set("whatsapp")} placeholder="Leave blank if same as phone" type="tel"/></div>
+        <div style={{marginBottom:14}}>{lbl("Email",true)}<input style={inp("email")} value={form.email} onChange={set("email")} placeholder="yourname@email.com" type="email"/><div style={{fontSize:"0.72rem",color:G.gray,marginTop:3}}>Used to send your Paystack receipt</div></div>
+
+        {sec("🛠️ Skill & Work Info")}
+        <div style={{marginBottom:14}}>{lbl("Primary Skill",true)}<input style={inp("skill")} value={form.skill} onChange={set("skill")} placeholder="e.g. Plumber, Web Developer"/>{errMsg("skill")}</div>
+        <div style={{marginBottom:14}}>{lbl("Category",true)}<select style={inp("category")} value={form.category} onChange={set("category")}><option value="">-- Select --</option>{CATEGORIES.map(c=><option key={c}>{c}</option>)}</select>{errMsg("category")}</div>
+        <div style={{marginBottom:14}}>{lbl("Experience",true)}<select style={inp("experience")} value={form.experience} onChange={set("experience")}><option value="">-- Select --</option>{["Less than 1 year","1–2 years","3–5 years","6–10 years","10+ years"].map(x=><option key={x}>{x}</option>)}</select>{errMsg("experience")}</div>
+        {/* PRICING SECTION */}
+        <div style={{marginBottom:14}}>
+          {lbl("Pricing Type",true)}
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {[["fixed","💰 Fixed Price"],["range","📊 Price Range"],["negotiable","🤝 Negotiable"]].map(([v,l])=>(
+              <button key={v} type="button" onClick={()=>setForm(f=>({...f,priceType:v}))}
+                style={{flex:1,minWidth:90,padding:"10px 8px",borderRadius:10,border:`2px solid ${form.priceType===v?G.green:"#E5E7EB"}`,background:form.priceType===v?"rgba(0,135,81,.08)":"#fff",color:form.priceType===v?G.green:G.gray,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.78rem",transition:"all .2s"}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Price Unit */}
+        <div style={{marginBottom:14}}>
+          {lbl("Price Unit",true)}
+          <select style={inp()} value={form.priceUnit} onChange={set("priceUnit")}>
+            {PRICE_UNITS.map(u=><option key={u} value={u}>{u.charAt(0).toUpperCase()+u.slice(1)}</option>)}
+          </select>
+        </div>
+
+        {/* Fixed price */}
+        {form.priceType==="fixed"&&(
+          <div style={{marginBottom:14}}>
+            {lbl("Your Price (₦)",true)}
+            <div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"11px 12px",fontWeight:700,color:G.gray}}>₦</span><input style={{...inp("rate"),borderLeft:"none",borderRadius:"0 10px 10px 0"}} type="number" value={form.rate} onChange={set("rate")} placeholder="e.g. 5000" min="0"/></div>
+            {errMsg("rate")}
+          </div>
+        )}
+
+        {/* Range price */}
+        {form.priceType==="range"&&(
+          <div style={{marginBottom:14}}>
+            {lbl("Price Range (₦)",true)}
+            <div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",alignItems:"center",gap:8}}>
+              <div><div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"11px 12px",fontWeight:700,color:G.gray,fontSize:"0.85rem"}}>₦</span><input style={{...inp("rateMin"),borderLeft:"none",borderRadius:"0 10px 10px 0"}} type="number" value={form.rateMin} onChange={set("rateMin")} placeholder="Min e.g. 5000" min="0"/></div>{errMsg("rateMin")}</div>
+              <div style={{textAlign:"center",color:G.gray,fontWeight:700,fontSize:"0.9rem"}}>–</div>
+              <div><div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"11px 12px",fontWeight:700,color:G.gray,fontSize:"0.85rem"}}>₦</span><input style={{...inp("rateMax"),borderLeft:"none",borderRadius:"0 10px 10px 0"}} type="number" value={form.rateMax} onChange={set("rateMax")} placeholder="Max e.g. 20000" min="0"/></div>{errMsg("rateMax")}</div>
+            </div>
+            {form.rateMin&&form.rateMax&&parseInt(form.rateMin)<parseInt(form.rateMax)&&(
+              <div style={{background:"rgba(0,135,81,.08)",borderRadius:8,padding:"7px 12px",marginTop:8,fontSize:"0.78rem",color:G.green,fontWeight:600}}>✓ Range: ₦{fmt(form.rateMin)} – ₦{fmt(form.rateMax)} {form.priceUnit}</div>
+            )}
+          </div>
+        )}
+
+        {/* Negotiable note */}
+        {form.priceType==="negotiable"&&(
+          <div style={{background:"rgba(245,158,11,.1)",border:"1px solid rgba(245,158,11,.3)",borderRadius:10,padding:"12px 14px",marginBottom:14,fontSize:"0.82rem",color:"#92400E",lineHeight:1.6}}>
+            🤝 Your profile will show <strong>"Negotiable"</strong> as the price. Customers will contact you to discuss rates.
+          </div>
+        )}
+        <div style={{marginBottom:14}}>
+          {lbl("Skill Tags",true)}
+          {/* Selected tags */}
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,border:`1.5px solid ${errs.tags?G.red:"#E5E7EB"}`,borderRadius:10,padding:"8px 10px",background:"#fff",minHeight:48,marginBottom:8}}>
+            {tags.map((t,i)=>{const c=tagColor(i);return(<span key={i} style={{background:c.bg,color:c.color,border:`1px solid ${c.border}`,padding:"4px 10px",borderRadius:50,fontSize:"0.75rem",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>{t}<button type="button" onClick={()=>setTags(ts=>ts.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:c.color,fontSize:"0.85rem",padding:0}}>×</button></span>);})}
+            <input value={tagIn} onChange={e=>setTagIn(e.target.value)} onKeyDown={addTag} placeholder={tags.length<MAX_TAGS?"Type a tag & press Enter…":`Max ${MAX_TAGS} tags`} style={{border:"none",outline:"none",fontSize:"0.83rem",flex:1,minWidth:100,background:"transparent",color:G.dark}} disabled={tags.length>=MAX_TAGS}/>
+          </div>
+          {/* Suggested tags */}
+          {form.category && SUGGESTED_TAGS[form.category] && (
+            <div>
+              <div style={{fontSize:"0.72rem",color:G.gray,marginBottom:6}}>💡 Suggested — click to add:</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {SUGGESTED_TAGS[form.category].filter(s=>!tags.includes(s)).slice(0,16).map((s,i)=>(
+                  <button key={s} type="button" onClick={()=>{ if(tags.length<MAX_TAGS) setTags(t=>[...t,s]); }} disabled={tags.length>=MAX_TAGS}
+                    style={{background:"#F3F4F6",color:G.gray,border:"1px solid #E5E7EB",borderRadius:50,padding:"3px 10px",fontSize:"0.72rem",fontWeight:500,cursor:"pointer",transition:"all .15s"}}
+                    onMouseEnter={e=>{e.target.style.background=tagColor(i).bg;e.target.style.color=tagColor(i).color;e.target.style.borderColor=tagColor(i).border;}}
+                    onMouseLeave={e=>{e.target.style.background="#F3F4F6";e.target.style.color=G.gray;e.target.style.borderColor="#E5E7EB";}}>
+                    + {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{fontSize:"0.7rem",color:G.gray,marginTop:6}}>Up to {MAX_TAGS} tags · {tags.length}/{MAX_TAGS} used</div>
+          {errMsg("tags")}
+        </div>
+        <div style={{marginBottom:14}}>{lbl("Bio",true)}<textarea style={{...inp("bio"),resize:"vertical",minHeight:90}} value={form.bio} onChange={set("bio")} placeholder="Tell customers about your experience…"/><div style={{fontSize:"0.72rem",color:G.gray,marginTop:4}}>Minimum 40 characters</div>{errMsg("bio")}</div>
+
+        {sec("📍 Location")}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          <div>{lbl("City",true)}<input style={inp("city")} value={form.city} onChange={set("city")} placeholder="e.g. Lagos"/>{errMsg("city")}</div>
+          <div>{lbl("State",true)}<select style={inp("state")} value={form.state} onChange={set("state")}><option value="">-- State --</option>{STATES.map(s=><option key={s}>{s}</option>)}</select>{errMsg("state")}</div>
+        </div>
+
+        {/* Fee summary */}
+        <div style={{background:"linear-gradient(135deg,#EFF6FF,#DBEAFE)",border:"1.5px solid #93C5FD",borderRadius:14,padding:16,margin:"20px 0"}}>
+          <div style={{fontFamily:"Syne,sans-serif",fontSize:"0.85rem",fontWeight:700,color:"#1E3A5F",marginBottom:10}}>💡 Fee Summary</div>
+          {[["Annual Registration Fee",`₦${fmt(REG_FEE)} (paid today)`],["Payment Options","Paystack or Bank Transfer"],["After payment","Admin reviews & approves your profile"],["10% Contact Fee","Charged per customer contact"],["Renewal","Every 12 months"],].map(([k,v])=>(
+            <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:"0.8rem",color:"#1E4080",padding:"4px 0",borderBottom:"1px solid rgba(147,197,253,.4)"}}><span style={{color:"#3B82F6"}}>{k}</span><strong>{v}</strong></div>
+          ))}
+          {baseRate>0&&form.priceType!=="negotiable"&&<div style={{background:"rgba(59,130,246,.1)",borderRadius:8,padding:"8px 10px",marginTop:8,fontSize:"0.78rem",color:"#1E40AF"}}>📌 {form.priceType==="range"?`Starting from ₦${fmt(form.rateMin)}`:`Your price ₦${fmt(form.rate)}`} → 10% contact fee = ₦{fmt(fee)} per contact</div>}
+        </div>
+
+        <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:6}}>
+          <input type="checkbox" id="terms" checked={agreed} onChange={e=>setAgreed(e.target.checked)} style={{marginTop:2,width:16,height:16,accentColor:G.green,flexShrink:0,cursor:"pointer"}}/>
+          <label htmlFor="terms" style={{fontSize:"0.8rem",color:G.gray,lineHeight:1.5,cursor:"pointer"}}>
+            I agree to the <a href="#" style={{color:G.green}}>Terms & Conditions</a>, the <strong>₦{fmt(REG_FEE)} annual registration fee</strong>, and the <strong>10% contact fee</strong>.
+          </label>
+        </div>
+        {errMsg("terms")}
+
+        <button onClick={submit} style={{width:"100%",background:"linear-gradient(135deg,#008751,#00b86a)",color:"#fff",border:"none",borderRadius:14,padding:15,fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"1rem",marginTop:16,boxShadow:"0 4px 18px rgba(0,135,81,.3)"}}>
+          🚀 Continue to Payment →
+        </button>
+        <div style={{textAlign:"center",fontSize:"0.75rem",color:G.gray,marginTop:10}}>You'll be asked to pay ₦{fmt(REG_FEE)} on the next step</div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TRUSTED WORKER FORM
+// ═══════════════════════════════════════════════════════════════
+function TrustedWorkerForm({ onAdd, onCancel }) {
+  const empty={name:"",phone:"",skill:"",cat:"",city:"",state:"",priceType:"fixed",priceUnit:"per job",rate:"",rateMin:"",rateMax:"",bio:"",avatar:""};
+  const [f,setF]=useState(empty); const [tags,setTags]=useState([]); const [tagIn,setTagIn]=useState(""); const [errs,setErrs]=useState({});
+  const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const addTag=e=>{ if((e.key==="Enter"||e.key===",")&&tagIn.trim()&&tags.length<MAX_TAGS){e.preventDefault();setTags(t=>[...t,tagIn.trim()]);setTagIn("");} };
+  const submit=()=>{
+    const e={};
+    ["name","phone","skill","cat","city","state","rate","bio"].forEach(k=>{if(!f[k].trim())e[k]="Required";});
+    if(tags.length===0)e.tags="Add at least one tag";
+    if(Object.keys(e).length){setErrs(e);return;}
+    const catAv={"Home Services":"🛠️","Construction & Trades":"🏗️","Tech & IT":"💻","Creative & Design":"🎨"};
+    onAdd({id:uid(),name:f.name.trim(),phone:f.phone.trim(),skill:f.skill.trim(),cat:f.cat,city:f.city.trim(),state:f.state,avatar:f.avatar.trim()||catAv[f.cat]||"👷",rating:5.0,reviews:0,bio:f.bio.trim(),tags:[...tags],verified:true,rate:parseInt(f.priceType==="range"?f.rateMin:f.rate)||0,rateMin:parseInt(f.rateMin)||null,rateMax:parseInt(f.rateMax)||null,priceType:f.priceType,priceUnit:f.priceUnit,status:"approved",trusted:true,regPaid:true,regExpiry:"N/A"});
+  };
+  const inp=k=>({width:"100%",border:`1.5px solid ${errs[k]?G.red:"#E5E7EB"}`,borderRadius:10,padding:"10px 12px",fontSize:"0.88rem",color:G.dark,outline:"none",background:"#fff"});
+  const lbl=(t,req)=><label style={{display:"block",fontSize:"0.78rem",fontWeight:600,marginBottom:4,color:G.dark}}>{t}{req&&<span style={{color:G.red}}> *</span>}</label>;
+  const err=k=>errs[k]&&<div style={{fontSize:"0.7rem",color:G.red,marginTop:3}}>{errs[k]}</div>;
+  return (
+    <div style={{background:"linear-gradient(135deg,#FFFDF0,#FFF5CC)",border:`2px solid ${TRUSTED_BORDER}`,borderRadius:16,padding:20}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+        <div style={{fontSize:"1.8rem"}}>👑</div>
+        <div><div style={{fontFamily:"Syne,sans-serif",fontSize:"1rem",fontWeight:800,color:TRUSTED_GOLD}}>Add Trusted Worker</div><div style={{fontSize:"0.75rem",color:"#7C5A00"}}>Instantly approved with Trusted badge · No registration fee</div></div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>{lbl("Full Name",true)}<input style={inp("name")} value={f.name} onChange={set("name")} placeholder="e.g. Chidi Okeke"/>{err("name")}</div>
+        <div>{lbl("Phone",true)}<input style={inp("phone")} value={f.phone} onChange={set("phone")} placeholder="08012345678" type="tel"/>{err("phone")}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>{lbl("Skill",true)}<input style={inp("skill")} value={f.skill} onChange={set("skill")} placeholder="e.g. Plumber"/>{err("skill")}</div>
+        <div>{lbl("Category",true)}<select style={inp("cat")} value={f.cat} onChange={set("cat")}><option value="">-- Select --</option>{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select>{err("cat")}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>{lbl("City",true)}<input style={inp("city")} value={f.city} onChange={set("city")} placeholder="e.g. Lagos"/>{err("city")}</div>
+        <div>{lbl("State",true)}<select style={inp("state")} value={f.state} onChange={set("state")}><option value="">-- State --</option>{STATES.map(s=><option key={s}>{s}</option>)}</select>{err("state")}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+        <div>
+        {lbl("Price Type",true)}
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          {[["fixed","Fixed"],["range","Range"],["negotiable","Negotiable"]].map(([v,l])=>(
+            <button key={v} type="button" onClick={()=>setF(p=>({...p,priceType:v}))} style={{flex:1,padding:"8px 6px",borderRadius:8,border:`2px solid ${f.priceType===v?TRUSTED_GOLD:"#E5E7EB"}`,background:f.priceType===v?"rgba(218,165,32,.1)":"#fff",color:f.priceType===v?TRUSTED_GOLD:G.gray,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.72rem"}}>{l}</button>
+          ))}
+        </div>
+        <select style={{...inp(),...{marginBottom:8}}} value={f.priceUnit} onChange={set("priceUnit")}>{PRICE_UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+        {f.priceType==="fixed"&&<div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"10px 11px",fontWeight:700,color:G.gray}}>₦</span><input style={{...inp("rate"),borderLeft:"none",borderRadius:"0 10px 10px 0"}} type="number" min="0" value={f.rate} onChange={set("rate")} placeholder="e.g. 5000"/></div>}
+        {f.priceType==="range"&&<div style={{display:"grid",gridTemplateColumns:"1fr auto 1fr",gap:6,alignItems:"center"}}><div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"10px 10px",fontWeight:700,color:G.gray,fontSize:"0.82rem"}}>₦</span><input style={{...inp("rateMin"),borderLeft:"none",borderRadius:"0 10px 10px 0",fontSize:"0.85rem"}} type="number" min="0" value={f.rateMin} onChange={set("rateMin")} placeholder="Min"/></div><span style={{textAlign:"center",color:G.gray,fontWeight:700}}>–</span><div style={{display:"flex",alignItems:"center"}}><span style={{background:G.light,border:"1.5px solid #E5E7EB",borderRight:"none",borderRadius:"10px 0 0 10px",padding:"10px 10px",fontWeight:700,color:G.gray,fontSize:"0.82rem"}}>₦</span><input style={{...inp("rateMax"),borderLeft:"none",borderRadius:"0 10px 10px 0",fontSize:"0.85rem"}} type="number" min="0" value={f.rateMax} onChange={set("rateMax")} placeholder="Max"/></div></div>}
+        {err("rate")} {err("rateMin")} {err("rateMax")}
+      </div>
+        <div>{lbl("Emoji Avatar")}<input style={inp()} value={f.avatar} onChange={set("avatar")} placeholder="e.g. 🔧"/><div style={{fontSize:"0.68rem",color:G.gray,marginTop:3}}>Leave blank for auto</div></div>
+      </div>
+      <div style={{marginBottom:10}}>{lbl("Skill Tags",true)}
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,border:`1.5px solid ${errs.tags?G.red:"#E5E7EB"}`,borderRadius:10,padding:"8px 10px",background:"#fff",minHeight:42}}>
+          {tags.map((t,i)=>{const c=tagColor(i);return(<span key={i} style={{background:c.bg,color:c.color,border:`1px solid ${c.border}`,padding:"3px 9px",borderRadius:50,fontSize:"0.73rem",display:"flex",alignItems:"center",gap:4}}>{t}<button type="button" onClick={()=>setTags(ts=>ts.filter((_,j)=>j!==i))} style={{background:"none",border:"none",cursor:"pointer",color:c.color,fontSize:"0.82rem",padding:0}}>×</button></span>);})}
+          <input value={tagIn} onChange={e=>setTagIn(e.target.value)} onKeyDown={addTag} placeholder={tags.length<MAX_TAGS?`Add tag + Enter… (${tags.length}/${MAX_TAGS})`:`Max ${MAX_TAGS}`} style={{border:"none",outline:"none",fontSize:"0.83rem",flex:1,minWidth:80,background:"transparent"}} disabled={tags.length>=MAX_TAGS}/>
+        </div>{err("tags")}
+      </div>
+      <div style={{marginBottom:16}}>{lbl("Bio",true)}<textarea style={{...inp("bio"),resize:"vertical",minHeight:80}} value={f.bio} onChange={set("bio")} placeholder="Why do you trust this worker?"/>{err("bio")}</div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={submit} style={{flex:1,background:"linear-gradient(135deg,#DAA520,#B8860B)",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontFamily:"Syne,sans-serif",fontWeight:800,fontSize:"0.92rem",boxShadow:"0 4px 16px rgba(218,165,32,.4)"}}>👑 Add as Trusted Worker</button>
+        {onCancel&&<button onClick={onCancel} style={{background:G.light,color:G.gray,border:"none",borderRadius:12,padding:"13px 16px",fontSize:"0.88rem"}}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ADMIN PAGE
+// ═══════════════════════════════════════════════════════════════
+function AdminPage({ workers, onUpdateWorker, onDeleteWorker, onAddTrusted }) {
+  const [authed,setAuthed]=useState(false); const [pwd,setPwd]=useState(""); const [pwdErr,setPwdErr]=useState("");
+  const [tab,setTab]=useState("pending"); const [search,setSearch]=useState(""); const [showTrustedForm,setShowTrustedForm]=useState(false);
+
+  const transactions=[
+    {ref:"NS_001",worker:"Amaka Obi",    customer:"customer@gmail.com",job:10000,fee:1000,date:"2026-03-18",type:"contact"},
+    {ref:"NS_002",worker:"Dayo Adebayo", customer:"john@yahoo.com",    job:50000,fee:5000,date:"2026-03-19",type:"contact"},
+    {ref:"REG_003",worker:"Blessing Ikenna",customer:"blessing@gmail.com",job:REG_FEE,fee:REG_FEE,date:"2026-03-20",type:"registration"},
+    {ref:"REG_004",worker:"Kunle Adeyemi",  customer:"kunle@gmail.com",  job:REG_FEE,fee:REG_FEE,date:"2026-03-21",type:"registration"},
+  ];
+  const totalRevenue=transactions.reduce((s,t)=>s+t.fee,0);
+  const totalRegFees=transactions.filter(t=>t.type==="registration").reduce((s,t)=>s+t.fee,0);
+  const totalContactFees=transactions.filter(t=>t.type==="contact").reduce((s,t)=>s+t.fee,0);
+
+  const login=()=>{ if(pwd===ADMIN_PASSWORD){setAuthed(true);setPwdErr("");}else setPwdErr("Incorrect password."); };
+  if(!authed) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"60vh",padding:24}}>
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,padding:"36px 28px",width:"100%",maxWidth:360,boxShadow:"0 8px 40px rgba(0,0,0,.12)",textAlign:"center"}}>
+        <div style={{fontSize:"3rem",marginBottom:12}}>🛡️</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800,marginBottom:6}}>Admin Login</div>
+        <input type="password" value={pwd} onChange={e=>setPwd(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} placeholder="Password" style={{width:"100%",border:`1.5px solid ${pwdErr?G.red:"#E5E7EB"}`,borderRadius:10,padding:"11px 13px",fontSize:"0.9rem",outline:"none",marginBottom:8}}/>
+        {pwdErr&&<div style={{color:G.red,fontSize:"0.78rem",marginBottom:10}}>{pwdErr}</div>}
+        <button onClick={login} style={{width:"100%",background:G.green,color:"#fff",border:"none",borderRadius:12,padding:13,fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.95rem"}}>Login</button>
+        <div style={{fontSize:"0.72rem",color:G.gray,marginTop:12}}>Demo: <code style={{background:G.light,padding:"2px 6px",borderRadius:4}}>admin123</code></div>
+      </div>
+    </div>
+  );
+
+  const pending=workers.filter(w=>w.status==="pending").length;
+  const trusted=workers.filter(w=>w.trusted).length;
+  const displayed=workers.filter(w=>{ if(tab==="pending")return w.status==="pending"; if(tab==="approved")return w.status==="approved"&&!w.trusted; if(tab==="trusted")return w.trusted; return true; }).filter(w=>!search||w.name.toLowerCase().includes(search.toLowerCase())||w.skill.toLowerCase().includes(search.toLowerCase()));
+  const tabS=t=>({padding:"8px 13px",borderRadius:50,fontSize:"0.76rem",fontWeight:600,border:`1.5px solid ${tab===t?(t==="trusted"?TRUSTED_BORDER:G.green):"#E5E7EB"}`,background:tab===t?(t==="trusted"?"linear-gradient(135deg,#DAA520,#FFD700)":G.green):"#fff",color:tab===t?(t==="trusted"?"#3D2800":"#fff"):G.gray,cursor:"pointer",fontFamily:"Syne,sans-serif"});
+
+  return (
+    <div style={{padding:"20px 18px 40px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:10}}>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800}}>🛡️ Admin Panel</div>
+        <button onClick={()=>setShowTrustedForm(!showTrustedForm)} style={{background:"linear-gradient(135deg,#DAA520,#B8860B)",color:"#fff",border:"none",borderRadius:10,padding:"8px 14px",fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.8rem",boxShadow:"0 3px 12px rgba(218,165,32,.4)"}}>
+          {showTrustedForm?"✕ Close":"👑 Add Trusted Worker"}
+        </button>
+      </div>
+      {showTrustedForm&&<div style={{marginBottom:20}}><TrustedWorkerForm onAdd={w=>{onAddTrusted(w);setShowTrustedForm(false);setTab("trusted");}} onCancel={()=>setShowTrustedForm(false)}/></div>}
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:20}}>
+        {[[workers.length,"Workers","👷"],[pending,"Pending","⏳"],[trusted,"Trusted","👑"],[`₦${fmt(totalRevenue)}`, "Revenue","💰"]].map(([n,l,i])=>(
+          <div key={l} style={{background:"#fff",borderRadius:14,padding:"12px 8px",textAlign:"center",boxShadow:"0 2px 12px rgba(0,0,0,.06)"}}>
+            <div style={{fontSize:"1rem",marginBottom:3}}>{i}</div>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:"0.9rem",fontWeight:800,color:l==="Trusted"?TRUSTED_GOLD:G.green}}>{n}</div>
+            <div style={{fontSize:"0.58rem",color:G.gray,textTransform:"uppercase",letterSpacing:"0.6px"}}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        <button style={tabS("pending")}     onClick={()=>setTab("pending")}>⏳ Pending ({pending})</button>
+        <button style={tabS("approved")}    onClick={()=>setTab("approved")}>✅ Approved</button>
+        <button style={tabS("trusted")}     onClick={()=>setTab("trusted")}>👑 Trusted</button>
+        <button style={tabS("all")}         onClick={()=>setTab("all")}>👥 All</button>
+        <button style={tabS("transactions")}onClick={()=>setTab("transactions")}>💳 Revenue</button>
+      </div>
+
+      {tab==="transactions"?(
+        <div>
+          {/* Revenue breakdown */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+            <div style={{background:"linear-gradient(135deg,#1E40AF,#2563EB)",borderRadius:14,padding:"14px",textAlign:"center",color:"#fff"}}>
+              <div style={{fontSize:"0.75rem",opacity:.85}}>Registration Fees</div>
+              <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800}}>₦{fmt(totalRegFees)}</div>
+            </div>
+            <div style={{background:"linear-gradient(135deg,#008751,#00b86a)",borderRadius:14,padding:"14px",textAlign:"center",color:"#fff"}}>
+              <div style={{fontSize:"0.75rem",opacity:.85}}>Contact Fees (10%)</div>
+              <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800}}>₦{fmt(totalContactFees)}</div>
+            </div>
+          </div>
+          {transactions.map(t=>(
+            <div key={t.ref} style={{background:"#fff",borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:"0 2px 12px rgba(0,0,0,.06)",borderLeft:`4px solid ${t.type==="registration"?G.blue:G.green}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.88rem"}}>{t.worker}</div>
+                <div style={{background:t.type==="registration"?"rgba(37,99,235,.1)":"rgba(0,135,81,.1)",color:t.type==="registration"?G.blue:G.green,padding:"2px 10px",borderRadius:50,fontSize:"0.68rem",fontWeight:700}}>
+                  {t.type==="registration"?"📋 Reg Fee":"💼 Contact Fee"}
+                </div>
+              </div>
+              <div style={{fontSize:"0.78rem",color:G.gray,marginBottom:4}}>{t.customer} · {t.date}</div>
+              <div style={{display:"flex",gap:14,fontSize:"0.8rem"}}>
+                <span>Amount: <strong>₦{fmt(t.job)}</strong></span>
+                <span>Fee: <strong style={{color:t.type==="registration"?G.blue:G.green}}>₦{fmt(t.fee)}</strong></span>
+                <span style={{color:G.gray,fontSize:"0.7rem"}}>{t.ref}</span>
+              </div>
+            </div>
+          ))}
+          <div style={{background:"linear-gradient(135deg,#111827,#374151)",borderRadius:14,padding:"16px 18px",color:"#fff",textAlign:"center",marginTop:12}}>
+            <div style={{fontSize:"0.8rem",opacity:.8}}>Total Platform Revenue</div>
+            <div style={{fontFamily:"Syne,sans-serif",fontSize:"2rem",fontWeight:800}}>₦{fmt(totalRevenue)}</div>
+          </div>
+        </div>
+      ):(
+        <div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search workers…" style={{width:"100%",border:"1.5px solid #E5E7EB",borderRadius:10,padding:"10px 14px",fontSize:"0.88rem",outline:"none",marginBottom:14}}/>
+          {displayed.length===0&&<div style={{textAlign:"center",padding:"30px 0",color:G.gray}}>No workers found.</div>}
+          {displayed.map(w=>(
+            <div key={w.id} style={{background:"#fff",borderRadius:14,padding:"14px 16px",marginBottom:10,boxShadow:w.trusted?"0 2px 12px rgba(218,165,32,.2)":"0 2px 12px rgba(0,0,0,.06)",border:w.trusted?`2px solid ${TRUSTED_BORDER}`:"none",display:"flex",alignItems:"center",gap:12}}>
+              <div style={{fontSize:"1.8rem",width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:12,background:w.trusted?TRUSTED_BG:AVATAR_BG[w.cat],flexShrink:0}}>{w.avatar}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <div style={{fontFamily:"Syne,sans-serif",fontWeight:700,fontSize:"0.88rem"}}>{w.name}</div>
+                  {w.trusted&&<TrustedBadge/>}
+                </div>
+                <div style={{fontSize:"0.75rem",color:G.green}}>{w.skill} · {w.city}, {w.state}</div>
+                <div style={{fontSize:"0.7rem",color:G.gray,display:"flex",gap:10,marginTop:2,flexWrap:"wrap"}}>
+                  <span>{fmtPrice(w)}</span>
+                  {w.regPaid&&<span style={{color:G.blue}}>📋 Reg paid</span>}
+                  {w.regExpiry&&w.regExpiry!=="N/A"&&<span style={{color:G.gray}}>Renews: {w.regExpiry}</span>}
+                  {!w.regPaid&&<span style={{color:G.red}}>⚠️ Reg not paid</span>}
+                </div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
+                <div style={{padding:"2px 9px",borderRadius:50,fontSize:"0.63rem",fontWeight:700,fontFamily:"Syne,sans-serif",background:w.trusted?"linear-gradient(135deg,rgba(218,165,32,.2),rgba(255,215,0,.2))":w.status==="approved"?"rgba(0,135,81,.1)":"rgba(245,166,35,.15)",color:w.trusted?TRUSTED_GOLD:w.status==="approved"?G.green:"#7C5A00",textAlign:"center"}}>
+                  {w.trusted?"👑 Trusted":w.status==="approved"?"✅ Live":"⏳ Pending"}
+                </div>
+                {w.status==="pending"&&!w.trusted&&<button onClick={()=>onUpdateWorker(w.id,{status:"approved",verified:true})} style={{background:G.green,color:"#fff",border:"none",borderRadius:8,padding:"5px 10px",fontSize:"0.7rem",fontFamily:"Syne,sans-serif",fontWeight:700}}>Approve</button>}
+                {w.status==="approved"&&!w.trusted&&<button onClick={()=>onUpdateWorker(w.id,{status:"pending",verified:false})} style={{background:G.light,color:G.gray,border:"none",borderRadius:8,padding:"5px 10px",fontSize:"0.7rem"}}>Suspend</button>}
+                {!w.trusted&&<button onClick={()=>onDeleteWorker(w.id)} style={{background:"rgba(220,38,38,.08)",color:G.red,border:"none",borderRadius:8,padding:"5px 10px",fontSize:"0.7rem"}}>Delete</button>}
+                {w.trusted&&<div style={{fontSize:"0.6rem",color:TRUSTED_GOLD,textAlign:"center"}}>🔒 Protected</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PRIVATE TRUSTED PAGE
+// ═══════════════════════════════════════════════════════════════
+function TrustedPrivatePage({ onAdd }) {
+  const [done,setDone]=useState(false);
+  if(done) return (
+    <div style={{textAlign:"center",padding:"50px 24px"}}>
+      <div style={{fontSize:"4rem",marginBottom:12}}>👑</div>
+      <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.3rem",fontWeight:800,color:TRUSTED_GOLD,marginBottom:8}}>Trusted Worker Added!</div>
+      <div style={{fontSize:"0.88rem",color:G.gray,lineHeight:1.6,marginBottom:20}}>They're live with the Trusted by Owner badge.</div>
+      <button onClick={()=>setDone(false)} style={{background:"linear-gradient(135deg,#DAA520,#B8860B)",color:"#fff",border:"none",borderRadius:12,padding:"13px 28px",fontFamily:"Syne,sans-serif",fontWeight:700}}>Add Another</button>
+    </div>
+  );
+  return (
+    <div style={{padding:"28px 18px 48px",maxWidth:540,margin:"0 auto"}}>
+      <div style={{textAlign:"center",marginBottom:24}}>
+        <div style={{fontSize:"2.4rem",marginBottom:8}}>👑</div>
+        <div style={{fontFamily:"Syne,sans-serif",fontSize:"1.4rem",fontWeight:800,color:TRUSTED_GOLD}}>Add Trusted Worker</div>
+        <div style={{fontSize:"0.85rem",color:"#7C5A00",marginTop:4}}>Private owner access · No registration fee required</div>
+      </div>
+      <TrustedWorkerForm onAdd={w=>{onAdd(w);setDone(true);}}/>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  ROOT APP
+// ═══════════════════════════════════════════════════════════════
+export default function App() {
+  const [page,setPage]       = useState("directory");
+  const [workers,setWorkers] = useState(INITIAL_WORKERS);
+  const [quotes,setQuotes]   = useState(INITIAL_QUOTES);
+  const addQuote    = q   => setQuotes(qs=>[q,...qs]);
+  const updateQuote = q   => setQuotes(qs=>qs.map(x=>x.id===q.id?q:x));
+
+  useEffect(()=>{
+    const params = new URLSearchParams(window.location.search);
+    if(params.get("trusted")===TRUSTED_SECRET) setPage("trusted-private");
+  },[]);
+
+  const addWorker    = w      => setWorkers(ws=>[...ws,w]);
+  const updateWorker = (id,d) => setWorkers(ws=>ws.map(w=>w.id===id?{...w,...d}:w));
+  const deleteWorker = id     => setWorkers(ws=>ws.filter(w=>w.id!==id||w.trusted));
+  const addTrusted   = w      => setWorkers(ws=>[...ws,{...w,trusted:true,status:"approved",verified:true,regPaid:true,regExpiry:"N/A"}]);
+
+  return (
+    <>
+      <style>{css}</style>
+      {page!=="trusted-private"&&<Header page={page} setPage={setPage}/>}
+      {page==="directory"      &&<DirectoryPage workers={workers} onAddQuote={addQuote}/>}
+      {page==="register"       &&<RegisterPage onRegister={addWorker}/>}
+      {page==="quotes"         &&<QuotesPage quotes={quotes} onUpdateQuote={updateQuote}/>}
+      {page==="admin"          &&<AdminPage workers={workers} onUpdateWorker={updateWorker} onDeleteWorker={deleteWorker} onAddTrusted={addTrusted}/>}
+      {page==="trusted-private"&&<TrustedPrivatePage onAdd={addTrusted}/>}
+      {page!=="trusted-private"&&(
+        <footer style={{textAlign:"center",padding:"22px 18px",fontSize:"0.76rem",color:G.gray,borderTop:"1px solid #E5E7EB",marginTop:10}}>
+          <strong style={{color:G.green,fontFamily:"Syne,sans-serif"}}>NaijaSkills</strong> — Connecting Nigerian talent to opportunity 🇳🇬
+          <div style={{fontSize:"0.7rem",marginTop:4}}>₦{fmt(REG_FEE)}/year registration · 10% contact fee</div>
+        </footer>
+      )}
+    </>
+  );
+}
